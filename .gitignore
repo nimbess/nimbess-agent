@@ -13,3 +13,11 @@
 
 # jetbrains ide stuff
 .idea*
+
+vendor/github.com/
+vendor/golang.org/
+vendor/google.golang.org/
+vendor/gopkg.in/
+vendor/go.uber.org/
+vendor/k8s.io/
+vendor/honnef.co/
