@@ -24,39 +24,43 @@ const (
 	L2DriverMode = "layer2"
 	// BESS controls the configuration value for selecting BESS as a the data plane driver.
 	BESS = "BESS"
+	// BessDefaultPort is the default port configuration value to use for connecting to the BESS data plane
+	BessDefaultPort = 10514
+	// NimbessAgentPort is the default port that the Agent process will listen on
+	NimbessAgentPort = 9111
 )
 
 // Network contains the Nimbess Agent Network specific configuration.
 type Network struct {
-	Driver		string	`mapstructure:"driver"`
-	MacLearn	bool	`mapstructure:"mac_learning"`
-	TunnelMode	bool	`mapstructure:"tunnel_mode"`
-	FIBSize		int64	`mapstructure:"fib_size"`
+	Driver     string `mapstructure:"driver"`
+	MacLearn   bool   `mapstructure:"mac_learning"`
+	TunnelMode bool   `mapstructure:"tunnel_mode"`
+	FIBSize    int64  `mapstructure:"fib_size"`
 }
 
 // NimbessConfig contains the generic Nimbess Agent configuration.
 type NimbessConfig struct {
-	Port			int			`mapstructure:"agent_port"`
-	DataPlane		string		`mapstructure:"data_plane"`
-	DataPlanePort	int			`mapstructure:"data_plane_port"`
-	WorkerCores		[]int64		`mapstructure:"worker_cores"`
-	NICs			[]string	`mapstructure:"pci_devices"`
+	Port          int      `mapstructure:"agent_port"`
+	DataPlane     string   `mapstructure:"data_plane"`
+	DataPlanePort int      `mapstructure:"data_plane_port"`
+	WorkerCores   []int64  `mapstructure:"worker_cores"`
+	NICs          []string `mapstructure:"pci_devices"`
 	Network
 }
 
 // InitConfig loads Nimbess Agent config file into a configuration struct.
 // It returns a parsed Nimbess Configuration from a config file location.
 func InitConfig(cfgPath string) *NimbessConfig {
-	cfg := &NimbessConfig {
-		Port: 9111,
-		DataPlane: BESS,
-		DataPlanePort: 10514,
-		WorkerCores: []int64{0},
+	cfg := &NimbessConfig{
+		Port:          NimbessAgentPort,
+		DataPlane:     BESS,
+		DataPlanePort: BessDefaultPort,
+		WorkerCores:   []int64{0},
 		Network: Network{
-			Driver: L2DriverMode,
-			MacLearn: false,
+			Driver:     L2DriverMode,
+			MacLearn:   false,
 			TunnelMode: false,
-			FIBSize: 1024,
+			FIBSize:    1024,
 		},
 	}
 	viper.SetConfigFile(cfgPath)

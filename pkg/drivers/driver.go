@@ -28,11 +28,11 @@ type Driver interface {
 
 // DriverConfig represents the generic driver configuration required by Driver.
 type DriverConfig struct {
-	NetworkMode	string
-	MacLearn	bool
-	TunnelMode	bool
-	FIBSize		int64
-	Port 		int
-	PCIDevices 	[]string
+	NetworkMode string
+	MacLearn    bool
+	TunnelMode  bool
+	FIBSize     int64
+	Port        int
+	PCIDevices  []string
 	WorkerCores []int64
 }

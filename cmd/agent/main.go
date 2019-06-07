@@ -31,20 +31,20 @@ import (
 )
 
 const (
-	// LogFile is name of Nimbess Agent log file
-	LogFile = "nimbess.log"
+	// LogFile holds the name of Nimbess Agent log file
+	LogFile = "nimbess-agent.log"
 )
 
 // Returns a configured driver object
-func selectDriver (config *agent.NimbessConfig) drivers.Driver {
+func selectDriver(config *agent.NimbessConfig) drivers.Driver {
 	driverConfig := drivers.DriverConfig{
-		NetworkMode:	config.Driver,
-		MacLearn:		config.MacLearn,
-		TunnelMode:		config.TunnelMode,
-		FIBSize:		config.FIBSize,
-		Port:			config.Port,
-		PCIDevices: 	config.NICs,
-		WorkerCores:	config.WorkerCores,
+		NetworkMode: config.Driver,
+		MacLearn:    config.MacLearn,
+		TunnelMode:  config.TunnelMode,
+		FIBSize:     config.FIBSize,
+		Port:        config.Port,
+		PCIDevices:  config.NICs,
+		WorkerCores: config.WorkerCores,
 	}
 	switch config.DataPlane {
 	case agent.BESS:
@@ -67,7 +67,7 @@ func main() {
 	if _, err := os.Stat(*logDir); os.IsNotExist(err) {
 		os.Mkdir(*logDir, 0644)
 	}
-	logFile, e := os.OpenFile(filepath.Join(*logDir, LogFile), os.O_WRONLY | os.O_APPEND | os.O_CREATE, 0644)
+	logFile, e := os.OpenFile(filepath.Join(*logDir, LogFile), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if e != nil {
 		panic(e)
 	}
