@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Defines Nimbess agent configuration.
 package agent
 
 import (
@@ -21,11 +20,13 @@ import (
 )
 
 const (
+	// L2DriverMode represents the supported Networking driver mode for Layer 2 networking.
 	L2DriverMode = "layer2"
+	// BESS controls the configuration value for selecting BESS as a the data plane driver.
 	BESS = "BESS"
 )
 
-// Nimbess Agent Network Configuration
+// Network contains the Nimbess Agent Network specific configuration.
 type Network struct {
 	Driver		string	`mapstructure:"driver"`
 	MacLearn	bool	`mapstructure:"mac_learning"`
@@ -33,7 +34,7 @@ type Network struct {
 	FIBSize		int64	`mapstructure:"fib_size"`
 }
 
-// Generic Nimbess Agent Configuration
+// NimbessConfig contains the generic Nimbess Agent configuration.
 type NimbessConfig struct {
 	Port			int			`mapstructure:"agent_port"`
 	DataPlane		string		`mapstructure:"data_plane"`
@@ -43,7 +44,8 @@ type NimbessConfig struct {
 	Network
 }
 
-// Load Nimbess Agent config file into a configuration struct
+// InitConfig loads Nimbess Agent config file into a configuration struct.
+// It returns a parsed Nimbess Configuration from a config file location.
 func InitConfig(cfgPath string) *NimbessConfig {
 	cfg := &NimbessConfig {
 		Port: 9111,
@@ -63,9 +65,8 @@ func InitConfig(cfgPath string) *NimbessConfig {
 	if err != nil {
 		log.Warningf("Unable to read Nimbess config file: %v, will use defaults", err)
 		return cfg
-	} else {
-		log.Infof("Configuration file found: %s", cfgPath)
 	}
+	log.Infof("Configuration file found: %s", cfgPath)
 	err = viper.Unmarshal(cfg)
 	if err != nil {
 		log.Fatalf("Unable to parse Nimbess config: %v", err)

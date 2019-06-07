@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// BESS data plane driver for Nimbess Agent
-
+// Package bess contains the BESS data plane driver for Nimbess Agent
 package bess
 
 import (
@@ -25,13 +24,13 @@ import (
 	"google.golang.org/grpc"
 )
 
-// TODO Bess driver to implement Driver interface
-// BESS driver for Nimbess Agent
-type BessDriver struct {
+// Driver represents the BESS driver for Nimbess Agent
+type Driver struct {
 	drivers.DriverConfig
 }
 
-func (d *BessDriver) Connect() *grpc.ClientConn {
+// Connect is used to setup gRPC connection with the data plane.
+func (d *Driver) Connect() *grpc.ClientConn {
 	log.Info("Connecting to BESS")
 	// TODO change this to unix socket connection
 	conn, err := grpc.Dial(fmt.Sprintf("localhost:%d", d.Port), grpc.WithInsecure())

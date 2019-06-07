@@ -20,11 +20,13 @@ import (
 	"google.golang.org/grpc"
 )
 
-// TODO define methods for a generic Data Plane driver
+// Driver represents an abstract data plane driver type.
 type Driver interface {
+	// TODO define more methods for a generic Data Plane driver
 	Connect() *grpc.ClientConn
 }
 
+// DriverConfig represents the generic driver configuration required by Driver.
 type DriverConfig struct {
 	NetworkMode	string
 	MacLearn	bool

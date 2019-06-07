@@ -29,23 +29,28 @@ import (
 	"github.com/nimbess/nimbess-agent/pkg/proto/cni"
 )
 
+// NimbessAgent represents the agent runtime server.
 type NimbessAgent struct {
 	Mu     *sync.Mutex
 	Config *NimbessConfig
 	Driver drivers.Driver
 }
 
+// Add implements CNI Add Handler.
+// It returns a CNI Reply to be sent to the Nimbess CNI client.
 func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIReply, error) {
 	//TODO implement
 	return &cni.CNIReply{}, nil
 }
 
+// Delete implements CNI Delete Handler.
+// It returns a CNI Reply to be sent to the Nimbess CNI client.
 func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CNIReply, error) {
 	//TODO implement
 	return &cni.CNIReply{}, nil
 }
 
-// Runtime for the Agent
+// Run starts up the main Agent daemon.
 func (s *NimbessAgent) Run() {
 	log.Info("Connecting to Data Plane")
 	dpConn := s.Driver.Connect()

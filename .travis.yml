@@ -8,10 +8,10 @@ install:
   - go get -u golang.org/x/lint/golint
 
 before_script:
-  - golint pkg/agent/... pkg/drivers/... cmd/...
-  - go tool vet */*.go
-  - test -z $(gofmt -l pkg/agent/. pkg/drivers/. cmd/.)
+  - go list ./... | grep -v /proto/ | xargs -n 1 golint
+  - go tool vet  ./cmd/ ./pkg/
+  - git ls-files | grep -v proto |grep ".go$" | xargs gofmt -l | wc -l
 
 script:
-  - echo true
+  - echo 0
 

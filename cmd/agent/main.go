@@ -48,7 +48,7 @@ func selectDriver (config *agent.NimbessConfig) drivers.Driver {
 	}
 	switch config.DataPlane {
 	case agent.BESS:
-		driver := &bess.BessDriver{DriverConfig: driverConfig}
+		driver := &bess.Driver{DriverConfig: driverConfig}
 		log.Infof("Driver loaded %+v", driver)
 		return driver
 	default:
