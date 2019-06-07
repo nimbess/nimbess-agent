@@ -19,13 +19,14 @@ package bess
 import (
 	"fmt"
 
-	"github.com/trozet/nimbess-agent/pkg/drivers"
+	"github.com/nimbess/nimbess-agent/pkg/drivers"
 
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
 // TODO Bess driver to implement Driver interface
+// BESS driver for Nimbess Agent
 type BessDriver struct {
 	drivers.DriverConfig
 }

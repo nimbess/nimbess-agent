@@ -25,8 +25,8 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
-	"github.com/trozet/nimbess-agent/pkg/drivers"
-	"github.com/trozet/nimbess-agent/pkg/proto/cni"
+	"github.com/nimbess/nimbess-agent/pkg/drivers"
+	"github.com/nimbess/nimbess-agent/pkg/proto/cni"
 )
 
 type NimbessAgent struct {

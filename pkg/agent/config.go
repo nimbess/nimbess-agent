@@ -25,7 +25,7 @@ const (
 	BESS = "BESS"
 )
 
-// INI config types
+// Nimbess Agent Network Configuration
 type Network struct {
 	Driver		string	`mapstructure:"driver"`
 	MacLearn	bool	`mapstructure:"mac_learning"`
@@ -33,6 +33,7 @@ type Network struct {
 	FIBSize		int64	`mapstructure:"fib_size"`
 }
 
+// Generic Nimbess Agent Configuration
 type NimbessConfig struct {
 	Port			int			`mapstructure:"agent_port"`
 	DataPlane		string		`mapstructure:"data_plane"`
@@ -42,7 +43,7 @@ type NimbessConfig struct {
 	Network
 }
 
-//Load Nimbess Agent config file into a configuration struct
+// Load Nimbess Agent config file into a configuration struct
 func InitConfig(cfgPath string) *NimbessConfig {
 	cfg := &NimbessConfig {
 		Port: 9111,

@@ -25,12 +25,13 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/trozet/nimbess-agent/pkg/agent"
-	"github.com/trozet/nimbess-agent/pkg/drivers"
-	"github.com/trozet/nimbess-agent/pkg/drivers/bess"
+	"github.com/nimbess/nimbess-agent/pkg/agent"
+	"github.com/nimbess/nimbess-agent/pkg/drivers"
+	"github.com/nimbess/nimbess-agent/pkg/drivers/bess"
 )
 
 const (
+	// LogFile is name of Nimbess Agent log file
 	LogFile = "nimbess.log"
 )
 
