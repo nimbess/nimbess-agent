@@ -33,6 +33,10 @@ import (
 const (
 	// LogFile holds the name of Nimbess Agent log file
 	LogFile = "nimbess-agent.log"
+	// LogDir is the default path for Agent logging
+	LogDir = "/var/log/nimbess"
+	// ConfigFile holds the default path to the Nimbess Agent configuration file
+	ConfigFile = "/etc/nimbess/agent/agent.yaml"
 )
 
 // Returns a configured driver object
@@ -59,9 +63,9 @@ func selectDriver(config *agent.NimbessConfig) drivers.Driver {
 
 func main() {
 	// Determine Agent configuration
-	confFile := flag.String("config-file", "/etc/nimbess/agent/agent.yaml",
+	confFile := flag.String("config-file", ConfigFile,
 		"Nimbess Agent config file path")
-	logDir := flag.String("log-dir", "/var/log/nimbess", "Logging directory path")
+	logDir := flag.String("log-dir", LogDir, "Logging directory path")
 	flag.Parse()
 
 	if _, err := os.Stat(*logDir); os.IsNotExist(err) {
@@ -79,5 +83,7 @@ func main() {
 	driver := selectDriver(nimbessConfig)
 	// Start agent
 	nimbessAgent := agent.NimbessAgent{Mu: &sync.Mutex{}, Config: nimbessConfig, Driver: driver}
-	nimbessAgent.Run()
+	if err := nimbessAgent.Run(); err != nil {
+		log.Fatalf("Nimbess Agent has died: %v", err)
+	}
 }

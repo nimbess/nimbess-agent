@@ -30,6 +30,9 @@ import (
 )
 
 // NimbessAgent represents the agent runtime server.
+// It contains a loadable runtime data plane driver to manage the data plane.
+// It includes a mutex used to handle locking between driver and agent events to force a
+// single-processed event pipeline.
 type NimbessAgent struct {
 	Mu     *sync.Mutex
 	Config *NimbessConfig
@@ -51,19 +54,22 @@ func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CN
 }
 
 // Run starts up the main Agent daemon.
-func (s *NimbessAgent) Run() {
+func (s *NimbessAgent) Run() error {
+	log.Info("Starting Nimbess Agent...")
 	log.Info("Connecting to Data Plane")
 	dpConn := s.Driver.Connect()
 	defer dpConn.Close()
-	log.Info("Starting Nimbess Agent...")
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Config.Port))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		log.Errorf("Failed to listen on port: %d", s.Config.Port)
+		return err
 	}
+	log.Info("Starting Nimbess gRPC server...")
 	grpcServer := grpc.NewServer()
 	cni.RegisterRemoteCNIServer(grpcServer, s)
 	err = grpcServer.Serve(lis)
 	if err != nil {
-		log.Fatalf("Nimbess Agent has died: %v", err)
+		return err
 	}
+	return nil
 }
