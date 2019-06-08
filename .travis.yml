@@ -1,0 +1,17 @@
+language: go
+dist: trusty
+
+go:
+  - 1.11.x
+
+install:
+  - go get -u golang.org/x/lint/golint
+
+before_script:
+  - go list ./... | grep -v /proto/ | xargs -n 1 golint
+  - go tool vet  ./cmd/ ./pkg/
+  - git ls-files | grep -v proto |grep ".go$" | xargs gofmt -l | wc -l
+
+script:
+  - echo 0
+
