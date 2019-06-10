@@ -30,6 +30,9 @@ const (
 	NimbessAgentPort = 9111
 )
 
+// SupportedForwarders contains a list of the supported core packet forwarder types
+var SupportedForwarders = [...]string{L2DriverMode}
+
 // Network contains the Nimbess Agent Network specific configuration.
 type Network struct {
 	Driver     string `mapstructure:"driver"`
@@ -78,4 +81,13 @@ func InitConfig(cfgPath string) *NimbessConfig {
 		log.Infof("Configuration parsed as: +%v", cfg)
 	}
 	return cfg
+}
+
+func isValidForwarder(forwarder string) bool {
+	for _, suppObject := range SupportedForwarders {
+		if forwarder == suppObject {
+			return true
+		}
+	}
+	return false
 }
