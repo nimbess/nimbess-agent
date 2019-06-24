@@ -68,3 +68,27 @@ run time. A data plane driver is responsible for taking in Port Pipeline objects
 specific configuration, and then updating the Port Pipeline Modules with any related network configuration.
 This returned network configuration may vary per module, but as an example, updating a new Port object with
 the MAC address returned from the data plane when the Port is created.
+
+## Example Code Flow - CNI ADD Request
+
+Below is an example of walking through the pseudo code of a CNI ADD request:
+
+[![CNI CodeFlow](./img/code2flow_IvSpoQ.svg)](./img/code2flow_IvSpoQ.svg)
+
+A Nimbess Pipeline structure is used to hold all of the information needed to define a network pipeline. It includes
+information such as an array of all modules in the pipeline, the MetaKey for this pipeline, which port this
+pipeline belongs to, etc. While the pipeline holds the information describing which modules belong to the
+pipeline, it does not indicate module connectivity. Connectivity information is conveyed by the module itself,
+via Ingress and Egress Port Maps which contain a map of the gate number and a pointer to the next module this module is
+connected to, creating a multi-dimensional linked list. Therefore when a new Port Pipeline is created, it is necessary
+to make a copy of the Meta Pipeline, including a list of the Meta Modules used to instantiate a new Port Pipeline
+module list. However after creating the new Module list, all of the connectivity needs to be updated to point to the
+new instances of modules held within the Gate Maps. This is done via the above block which describes traversing the
+module linked list and updating it.
+
+After the new Port Pipeline is created, Ingress Port is created and attached to the Port Pipeline, and then rendered
+into the data plane via a driver call. Upon success of programming the data plane with the initial pipeline
+a lookup is performed to find other already existing Egress Ports which belong to this same network (MetaKey). If any
+applicable ports exist they are then added to the new Port Pipeline and the FIB (L2 or L3) is updated to handle traffic
+that should be destined out this port. Afterwards, the Egress Port that resulted from the CNI request is added to all
+other Port Pipelines which also belong to the network domain, and their FIBs are updated.
