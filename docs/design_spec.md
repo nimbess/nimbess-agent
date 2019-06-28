@@ -36,10 +36,10 @@ this design:
  2. Increases per network function processing efficiency
  3. Simplifies debugging
  
-When a Port is added to a pipeline, it is broken into an IngressPort as well as an EgressPort. Only the
-IngressPort is ever attached to a Port's pipeline. This prevents traffic from ever being forwarded back
-out the same interface from which it originated (1). The EgressPort is attached to every other port
-pipeline which belongs to the same network fabric (L2/L3 domain). Additionally, this design increases network
+When a Port is added to a pipeline, it is broken up into an IngressPort as well as an EgressPort. Only the
+IngressPort is ever attached to this Port's pipeline, while the EgressPort is attached to every other pipeline which
+belongs to the same network fabric (L2/L3 domain). This prevents traffic from ever being forwarded back
+out the same interface from which it originated (1). Additionally, this design increases network
 function processing efficiency, because the cache of the tables are limited to lookups for traffic that may ingress
 a single port. Debugging becomes easier because the only traffic in a particular pipeline only ever comes
 from a single port. However, one of the drawbacks to this design is that there is increased memory usage,
