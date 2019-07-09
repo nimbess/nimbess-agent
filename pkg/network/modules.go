@@ -42,7 +42,7 @@ type PipelineModule interface {
 
 // Module represents a generic Network Function.
 // It contains ingress gates and egress gates for traffic flow, which map to the next connected module.
-// Meta used to the name of the Meta Pipeline Module from which this module was created
+// Meta field is used to store the name of the Meta Pipeline Module from which this module was created
 type Module struct {
 	Meta   string
 	Name   string

@@ -106,7 +106,7 @@ func (s *NimbessPipeline) Init(port string, forwarder string, metaPipeline *Nimb
 		s.Modules = append(s.Modules, nil)
 		// Need to do deep copy Meta pipeline for port, and make unique module names
 		// Update linked list of modules by making new modules from meta pipeline for this pipeline
-		s.createPipelineLinkedList(metaPipeline.Modules[0], port)
+		s.createPipeline(metaPipeline.Modules[0], port)
 	} else {
 		if len(s.Modules) > 0 {
 			log.Debugf("Pipeline already exists, ignoring Init on meta pipeline: %v", metaPipeline)
@@ -126,10 +126,10 @@ func (s *NimbessPipeline) Init(port string, forwarder string, metaPipeline *Nimb
 	return nil
 }
 
-// createPipelineLinkedList recursively creates modules and then updates its linkage from meta pipeline module
+// createPipeline recursively creates modules and then updates its linkage from meta pipeline module
 // module should be the a pointer to the first module in a meta pipeline
 // port is name of new port used for this new port pipeline
-func (s *NimbessPipeline) createPipelineLinkedList(module network.PipelineModule, port string) network.PipelineModule {
+func (s *NimbessPipeline) createPipeline(module network.PipelineModule, port string) network.PipelineModule {
 	log.Debugf("Entered Linked List Create for module: %+v", module)
 	var newMod network.PipelineModule
 	// Check to see if the module was already added to this port pipeline
@@ -160,12 +160,12 @@ func (s *NimbessPipeline) createPipelineLinkedList(module network.PipelineModule
 
 	// Walk meta module Ingress gates and connect new port pipeline modules
 	for gate, mod := range module.GetIGateMap() {
-		newMod.Connect(s.createPipelineLinkedList(mod, port), false, &gate)
+		newMod.Connect(s.createPipeline(mod, port), false, &gate)
 	}
 
 	// Walk meta module Egress gates and connect new port pipeline modules
 	for gate, mod := range module.GetEGateMap() {
-		newMod.Connect(s.createPipelineLinkedList(mod, port), true, &gate)
+		newMod.Connect(s.createPipeline(mod, port), true, &gate)
 	}
 	return newMod
 }

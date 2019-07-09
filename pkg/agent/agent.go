@@ -44,6 +44,7 @@ const (
 	DriverFailure        = 101
 )
 
+// TODO REMOVE this when IPAM is supported from CNI side
 var ipAddr = net.IP{40, 0, 0, 0}
 
 // NimbessAgent represents the agent runtime server.
@@ -57,7 +58,7 @@ type NimbessAgent struct {
 	Driver drivers.Driver
 	// Pipelines contains a map of port name to pipeline pointer
 	Pipelines map[string]*NimbessPipeline
-	// MetaPipelines contains a map of network/VRF name to abstract pipelines
+	// MetaPipelines contains a map of network name to abstract pipelines
 	MetaPipelines map[string]*NimbessPipeline
 }
 
@@ -91,7 +92,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	port.IPAddr = fmt.Sprintf("%s/24", ipAddr.String())
 
 	// Initialize pipeline
-	// Check if meta pipeline exists for this network/VRF
+	// Check if meta pipeline exists for this network
 	var metaKey string
 	if s.Config.Network.Driver == L2DriverMode {
 		metaKey = req.NetworkConfig.GetName()
@@ -240,7 +241,7 @@ func (s *NimbessAgent) connectEgressPort(port *network.EgressPort, pipeline *Nim
 }
 
 // updatePipelinesEgress adds a new egress port to all Port pipelines that do not contain
-// excludedKey, as long as they belong to same network/VRF (metaKey).
+// excludedKey, as long as they belong to same network (metaKey).
 // Also will trigger an update to forwarder FIB if required.
 func (s *NimbessAgent) updatePipelinesEgress(port *network.EgressPort, excludedKey string, metaKey string) error {
 	log.Infof("Updating pipelines with new egress port: %s", port.Name)
