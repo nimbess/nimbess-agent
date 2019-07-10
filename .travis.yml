@@ -4,7 +4,7 @@ go:
   - 1.11.x
 env:
   global:
-    secure: Nt/ldUl7NQozf+US6EYY+fjEcgawCeKhO8KXo8JF8i2yC0Zc1Yc8tbAXdDHsLjNG1PuzWNP9M5fhJIfUwE3IUeuvrixE6ANP4mEk3998EBRwkUs8oCpkee1ZIxX3nnk0oW6LlfLZd6NWmbUSK0mRBlLi/mH3pMjUFfbkMhVQB/TzFec7zvQfYlFeeUPW0sOxfmTgrMx5ZJ+hpIoDtWW8R2RNb2L/y++BudaoG9fVUZhRTiJ7F+EbHEwRIAPYuQIXmy0CocUD3F5vaiVWXpKFIybV4dgrJL3xBUSzdU+K6d+I7ph1TRyzKyFr3h5di5oS+a7sQXjq2hTdQMs/swRCDhM1lciS9k7h5aGA6J9wuaRzt2itdCRALtnqRVFaEqLl36B1jvydRCAyV7LKfU70dcWkCEmwHOen6mfw/MJRTUpoqcAoP63VRL2Ip+eIa96yjsJDKziHN7g0ZRpG3AQz+CcZEDsbDDhYUo7papr9whkqzLuyDP+Uzme1F8SBqLBMyS9keTvYM1B8oBWf35SZq9EBlv3/4bXuKGJuswAKhXpZn7gpwjv7NTLNBUyuFN/8jy8Zpa5IDfEJDYUxKIAO39kJB2ye5FSDQJ/RhvEtOQKzd/+VzHwzbduq/uumZsR8+X6b4OtmO6rSyGht9Dd7y25JmdjAeGtJKuYISh3Qa1k=
+    secure: "KuhSkwBWX7Hu6UPElqK74FegH4D05aEtimHr/1TJAwKqquzsJvJoM8MRCyfZUunw2+h5GQnP7yGvTGZdfaRXOTIQQqOpaqHQQaaXNALN3pw65TfdaLokwiEfdB+4J5t/YhnLDCn+pyODgDToLyBtw5lubTnNZMQBaoVy20KDGtE+3jCWGPvjDh5YGGeL9KsCakeNdiBwWhZe1uf3mygYzTJpwmAGINtBSZ2Blimt3W9wtPoR3RT7TN6LYlIYYfC2M89XNTGXlcE/y+b0SQqaGgDcC0nxt3rMR1JVPpBD6nupjPh7ypWM4EWaMWiCudRyd1QXYQ/yffRHybGZxEmf6YwCHnN+BL9kQdFo6nkKq390ubDGPwdLsIudcfRBqAI65sxNXfzCOoJr7xMHdHk8HlgmqRSoMZr88PKlzzQSoQekBrpPLNqSnMkBI+6uGsnszi52HCRtBHxSXMpSl6Jkx8H7ShioREw7NUe3Eysx8aHnkX5MMX/AcgUU1d1ow0uzj1Z0zHdfb/FYNXCCkXHAc7ksH6T1k9HPX4GggoVJF6+C+2kXyRnSniEUkPsbCIdkDQeDbNP9HicCVEF6yXOEx6cFUN9aHZNUPhFTVFguH47hiXLd8wM8AMvwRAUbw9nO22jdw/VFPbTnL+3vmaoaijPRZM9OFjjkcsYOZJ1/abQ="
 
 install:
   - go get -u golang.org/x/lint/golint
@@ -19,7 +19,6 @@ script:
   - "./build/build-go.sh"
   - docker build -t nimbess/nimbess-agent .
 
-deploy:
 deploy:
   # Push images to Dockerhub on merge to master
   - provider: script
