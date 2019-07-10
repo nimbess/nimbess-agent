@@ -1,17 +1,33 @@
 language: go
 dist: trusty
-
 go:
   - 1.11.x
+env:
+  global:
+    secure: Nt/ldUl7NQozf+US6EYY+fjEcgawCeKhO8KXo8JF8i2yC0Zc1Yc8tbAXdDHsLjNG1PuzWNP9M5fhJIfUwE3IUeuvrixE6ANP4mEk3998EBRwkUs8oCpkee1ZIxX3nnk0oW6LlfLZd6NWmbUSK0mRBlLi/mH3pMjUFfbkMhVQB/TzFec7zvQfYlFeeUPW0sOxfmTgrMx5ZJ+hpIoDtWW8R2RNb2L/y++BudaoG9fVUZhRTiJ7F+EbHEwRIAPYuQIXmy0CocUD3F5vaiVWXpKFIybV4dgrJL3xBUSzdU+K6d+I7ph1TRyzKyFr3h5di5oS+a7sQXjq2hTdQMs/swRCDhM1lciS9k7h5aGA6J9wuaRzt2itdCRALtnqRVFaEqLl36B1jvydRCAyV7LKfU70dcWkCEmwHOen6mfw/MJRTUpoqcAoP63VRL2Ip+eIa96yjsJDKziHN7g0ZRpG3AQz+CcZEDsbDDhYUo7papr9whkqzLuyDP+Uzme1F8SBqLBMyS9keTvYM1B8oBWf35SZq9EBlv3/4bXuKGJuswAKhXpZn7gpwjv7NTLNBUyuFN/8jy8Zpa5IDfEJDYUxKIAO39kJB2ye5FSDQJ/RhvEtOQKzd/+VzHwzbduq/uumZsR8+X6b4OtmO6rSyGht9Dd7y25JmdjAeGtJKuYISh3Qa1k=
 
 install:
   - go get -u golang.org/x/lint/golint
 
 before_script:
+  - set -e
   - go list ./... | grep -v /proto/ | xargs -n 1 golint
   - go tool vet  ./cmd/ ./pkg/
   - git ls-files | grep -v proto |grep ".go$" | xargs gofmt -l | wc -l
 
 script:
-  - echo 0
+  - "./build/build-go.sh"
+  - docker build -t nimbess/nimbess-agent .
+
+deploy:
+deploy:
+  # Push images to Dockerhub on merge to master
+  - provider: script
+    on:
+      branch: master
+    script: >
+      bash -c '
+      docker login -u "$REGISTRY_USER" -p "$REGISTRY_PASS";
+      docker push nimbess/nimbess-agent:latest;
+      echo done'
 

@@ -15,6 +15,9 @@
 .idea*
 
 .swp*
+.swo*
+
+bin/
 
 vendor/github.com/
 vendor/golang.org/
