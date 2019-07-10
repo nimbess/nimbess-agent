@@ -14,6 +14,8 @@
 # jetbrains ide stuff
 .idea*
 
+.swp*
+
 vendor/github.com/
 vendor/golang.org/
 vendor/google.golang.org/

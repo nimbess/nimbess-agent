@@ -12,29 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Data Plane driver definition
-
-package drivers
+// Package bess contains the BESS data plane driver for Nimbess Agent
+package bess
 
 import (
 	"github.com/nimbess/nimbess-agent/pkg/network"
-	"google.golang.org/grpc"
 )
 
-// Driver represents an abstract data plane driver type.
-type Driver interface {
-	Connect() *grpc.ClientConn
-	RenderModules(module []network.PipelineModule) error
-	AddEntryL2FIB(module *network.Switch, macAddr string, gate network.Gate) error
+// L2Forward is a BESS module for MAC based switching
+type L2Forward struct {
+	network.Switch
 }
 
-// DriverConfig represents the generic driver configuration required by Driver.
-type DriverConfig struct {
-	NetworkMode string
-	MacLearn    bool
-	TunnelMode  bool
-	FIBSize     int64
-	Port        int
-	PCIDevices  []string
-	WorkerCores []int64
+// Replicate is a BESS module for replicating a single packet to multiple egress gates
+type Replicate struct {
+	network.Switch
 }

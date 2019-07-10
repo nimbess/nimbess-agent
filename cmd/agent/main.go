@@ -16,14 +16,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"path/filepath"
 
+	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"os"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 
 	"github.com/nimbess/nimbess-agent/pkg/agent"
 	"github.com/nimbess/nimbess-agent/pkg/drivers"
@@ -46,13 +47,14 @@ func selectDriver(config *agent.NimbessConfig) drivers.Driver {
 		MacLearn:    config.MacLearn,
 		TunnelMode:  config.TunnelMode,
 		FIBSize:     config.FIBSize,
-		Port:        config.Port,
+		Port:        config.DataPlanePort,
 		PCIDevices:  config.NICs,
 		WorkerCores: config.WorkerCores,
 	}
 	switch config.DataPlane {
 	case agent.BESS:
-		driver := &bess.Driver{DriverConfig: driverConfig}
+		// TODO (FIXME) Just use background context for now
+		driver := &bess.Driver{DriverConfig: driverConfig, Context: context.Background()}
 		log.Infof("Driver loaded %+v", driver)
 		return driver
 	default:
@@ -69,7 +71,7 @@ func main() {
 	flag.Parse()
 
 	if _, err := os.Stat(*logDir); os.IsNotExist(err) {
-		os.Mkdir(*logDir, 0644)
+		_ = os.Mkdir(*logDir, 0644)
 	}
 	logFile, e := os.OpenFile(filepath.Join(*logDir, LogFile), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if e != nil {
@@ -78,11 +80,20 @@ func main() {
 
 	mw := io.MultiWriter(os.Stdout, logFile)
 	log.SetOutput(mw)
+	// TODO make this log level configurable
+	log.SetLevel(log.DebugLevel)
 
 	nimbessConfig := agent.InitConfig(*confFile)
 	driver := selectDriver(nimbessConfig)
+	// Create Pipeline map of per port pipelines
+	nimbessPipelineMap := make(map[string]*agent.NimbessPipeline)
+	metaPipelineMap := make(map[string]*agent.NimbessPipeline)
+	// Generate ID for this Agent
+	// TODO(trozet) Make this ID stored in etcd and pull at agent start
+	agentID := uuid.New()
 	// Start agent
-	nimbessAgent := agent.NimbessAgent{Mu: &sync.Mutex{}, Config: nimbessConfig, Driver: driver}
+	nimbessAgent := agent.NimbessAgent{Mu: &sync.Mutex{}, Config: nimbessConfig, Driver: driver,
+		Pipelines: nimbessPipelineMap, ID: agentID, MetaPipelines: metaPipelineMap}
 	if err := nimbessAgent.Run(); err != nil {
 		log.Fatalf("Nimbess Agent has died: %v", err)
 	}
