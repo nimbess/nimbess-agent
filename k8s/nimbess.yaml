@@ -1,0 +1,80 @@
+---
+# This ConfigMap is used to configure a self-hosted Nimbess installation.
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: nimbess-config
+  namespace: kube-system
+data:
+  # The CNI network configuration to install on each node.
+  cni_network_config: |-
+    {
+        "name": "k8s-pod-network",
+        "type": "nimbess",
+        "log_level": "info",
+        "grpcServer": "localhost:9111",
+        "ipam": {
+            "type": "whereabouts"
+        }
+    }
+
+---
+
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: nimbess-agent
+  namespace: kube-system
+  labels:
+    k8s-app: nimbess-agent
+spec:
+  selector:
+    matchLabels:
+      k8s-app: nimbess-agent
+  template:
+    metadata:
+      labels:
+        k8s-app: nimbess-agent
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+        scheduler.alpha.kubernetes.io/tolerations: |
+          [{"key": "dedicated", "value": "master", "effect": "NoSchedule" },
+           {"key":"CriticalAddonsOnly", "operator":"Exists"},
+           {"operator":"Exists"}]
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        beta.kubernetes.io/os: "linux"
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: nimbess-agent
+          image: nimbess/nimbess-agent
+          command: ["/nimbess-agent"]
+        # This container installs the Nimbess CNI binary
+        # and CNI network config file on each node.
+        - name: install-cni
+          image: nimbess/cni:latest
+          command: ["/install-cni.sh"]
+          env:
+            # The CNI network config to install on each node.
+            - name: CNI_NETWORK_CONFIG
+              valueFrom:
+                configMapKeyRef:
+                  name: nimbess-config
+                  key: cni_network_config
+          volumeMounts:
+            - mountPath: /host/opt/cni/bin
+              name: cni-bin-dir
+            - mountPath: /host/etc/cni/net.d
+              name: cni-net-dir
+      volumes:
+        # Used to install CNI.
+        - name: cni-bin-dir
+          hostPath:
+            path: /opt/cni/bin
+        - name: cni-net-dir
+          hostPath:
+            path: /etc/cni/net.d
