@@ -590,3 +590,78 @@ func (d *Driver) AddEntryL2FIB(module *network.Switch, macAddr string, gate netw
 	log.Infof("BESS L2 FIB entry created: %+v", entry)
 	return nil
 }
+
+// deleteModule handles deleting a module by name in BESS. Ignores modules that do not exist.
+// name is name of module to delete
+func (d *Driver) deleteModule(name string) error {
+	exists, err := objectExists(d.bessClient, name, MODULE)
+	if err != nil {
+		log.Warningf("Skipping delete. Unable to query for BESS module: %s, error: %v", name, err)
+		return nil
+	} else if !exists {
+		log.Debugf("Skipping delete for BESS module: %s, module does not exist.", name)
+		return nil
+	}
+	res, err := d.bessClient.DestroyModule(context.Background(),
+		&bess_pb.DestroyModuleRequest{Name: name})
+	if err != nil {
+		log.Errorf("Failed to delete %s: %v", name, err)
+		return err
+	} else if res.Error.GetCode() != 0 {
+		log.Errorf("Failed to delete %s: %s", name, res.Error)
+		return errors.New(res.GetError().GetErrmsg())
+	} else {
+		log.Infof("Module deleted: %s", name)
+	}
+	return nil
+}
+
+// DeleteModules deletes all modules if they exist in BESS
+// When egress is false, egress ports will be ignored
+func (d *Driver) DeleteModules(modules []network.PipelineModule, egress bool) error {
+	log.Infof("Deleting BESS modules, egress: %t, modules: %v", egress, modules)
+	for _, module := range modules {
+		// If pipeline module is switch we need to translate Nimbess Switch into BESS modules
+		if reflect.TypeOf(module) == reflect.TypeOf(&network.Switch{}) {
+			log.Debug("Switch detected, deleting l2forward module")
+			if err := d.deleteModule(fmt.Sprintf("%s_l2forward", module.GetName())); err != nil {
+				return err
+			}
+			log.Debug("Switch detected, deleting replicator module")
+			if err := d.deleteModule(fmt.Sprintf("%s_replicate", module.GetName())); err != nil {
+				return err
+			}
+		} else {
+			if err := d.deleteModule(module.GetName()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DeletePort deletes a specific port if it exists in BESS
+func (d *Driver) DeletePort(name string) error {
+	log.Infof("Deleting BESS port: %s", name)
+	exists, err := objectExists(d.bessClient, name, PORT)
+	if err != nil {
+		log.Warningf("Skipping delete. Unable to query for BESS port: %s, error: %v", name, err)
+		return nil
+	} else if !exists {
+		log.Debugf("Skipping delete for BESS port: %s, port does not exist.", name)
+		return nil
+	}
+
+	res, err := d.bessClient.DestroyPort(context.Background(),
+		&bess_pb.DestroyPortRequest{Name: name})
+	if err != nil {
+		log.Errorf("Failed to delete %s: %v", name, err)
+		return err
+	} else if res.Error.GetCode() != 0 {
+		log.Errorf("Failed to delete %s: %s", name, res.Error)
+		return errors.New(res.GetError().GetErrmsg())
+	} else {
+		log.Infof("Module deleted: %s", name)
+	}
+	return nil
+}
