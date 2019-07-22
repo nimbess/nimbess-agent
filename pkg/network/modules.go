@@ -68,6 +68,7 @@ type Port struct {
 	NamesSpace string
 	IPAddr     string
 	MacAddr    string
+	Gateway    string
 }
 
 // IngressPort represents the RX side of a network interface

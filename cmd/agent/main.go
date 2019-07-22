@@ -48,7 +48,6 @@ func selectDriver(config *agent.NimbessConfig) drivers.Driver {
 		TunnelMode:  config.TunnelMode,
 		FIBSize:     config.FIBSize,
 		Port:        config.DataPlanePort,
-		PCIDevices:  config.NICs,
 		WorkerCores: config.WorkerCores,
 	}
 	switch config.DataPlane {
@@ -82,7 +81,7 @@ func main() {
 	log.SetOutput(mw)
 	// TODO make this log level configurable
 	log.SetLevel(log.DebugLevel)
-
+	log.SetReportCaller(true)
 	nimbessConfig := agent.InitConfig(*confFile)
 	driver := selectDriver(nimbessConfig)
 	// Create Pipeline map of per port pipelines

@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/any"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	"github.com/nimbess/nimbess-agent/pkg/proto/bess_pb"
+	"path"
 	"reflect"
 	"strings"
 
@@ -36,6 +38,7 @@ const (
 	PORT      = "Port"
 	MODULE    = "Module"
 	VPORT     = "VPort"
+	PCAPPORT  = "PCAPPort"
 	PORTOUT   = "PortOut"
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
@@ -162,16 +165,25 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 		// Figure out type of Module and proper create handler
 		switch reflect.TypeOf(module) {
 		case reflect.TypeOf(&network.IngressPort{}):
-			// Create Module Egress port
+			if exists, _ := objectExists(d.bessClient, module.GetName(), MODULE); exists == true {
+				log.Debugf("Skipping render for %s, already exists", module.GetName())
+				continue
+			}
+			// Create Module Ingress port
 			if err := d.createPortIncModule(module.(*network.IngressPort)); err != nil {
 				return err
 			}
 		case reflect.TypeOf(&network.EgressPort{}):
+			if exists, _ := objectExists(d.bessClient, module.GetName(), MODULE); exists == true {
+				log.Debugf("Skipping render for %s, already exists", module.GetName())
+				continue
+			}
 			// Create Module Egress port
 			if err := d.createPortOutModule(module.(*network.EgressPort)); err != nil {
 				return err
 			}
 		case reflect.TypeOf(&network.Switch{}):
+			// TODO(trozet) handle checking if switch already exists. This shouldn't happen
 			// Create L2Forward and Replicator
 			if err := d.createSwitch(module.(*network.Switch)); err != nil {
 				return err
@@ -233,6 +245,22 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 
+	// Set default gate for l2forward to 999
+	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 999}
+	gateAny, err := ptypes.MarshalAny(gateArg)
+	if err != nil {
+		log.Errorf("Failure to serialize default gate arg: %v", gateArg)
+		return err
+	}
+	cmdReq := &bess_pb.CommandRequest{Name: l2Fwd.GetName(), Cmd: "set_default_gate", Arg: gateAny}
+	res, err := d.bessClient.ModuleCommand(d.Context, cmdReq)
+	if err != nil {
+		log.Errorf("Failed to set default gate for l2forward, error: %v", err)
+		return err
+	} else if res.GetError().GetCode() != 0 {
+		log.Errorf("Failed to set default gate for l2forward, error: %s", res.GetError().GetErrmsg())
+		return errors.New(res.GetError().GetErrmsg())
+	}
 	log.Infof("BESS Switch created with L2FWD: %s, Replicate: %s", l2Fwd.Name, rep.Name)
 	return nil
 
@@ -246,7 +274,7 @@ func (d *Driver) createReplicateModule(module Replicate) error {
 		keys = append(keys, int64(k))
 	}
 	repArgs := &bess_pb.ReplicateArg{Gates: keys}
-	any, err := ptypes.MarshalAny(repArgs)
+	repAny, err := ptypes.MarshalAny(repArgs)
 	if err != nil {
 		log.Errorf("Failure to serialize replicate add args: %v", repArgs)
 		return err
@@ -254,7 +282,7 @@ func (d *Driver) createReplicateModule(module Replicate) error {
 	rep := &bess_pb.CreateModuleRequest{
 		Name:   module.Name,
 		Mclass: REPLICATE,
-		Arg:    any,
+		Arg:    repAny,
 	}
 	return d.createModule(rep)
 }
@@ -265,7 +293,7 @@ func (d *Driver) createL2ForwardModule(module L2Forward) error {
 		Size:  d.DriverConfig.FIBSize,
 		Learn: d.DriverConfig.MacLearn,
 	}
-	any, err := ptypes.MarshalAny(l2Args)
+	l2Any, err := ptypes.MarshalAny(l2Args)
 	if err != nil {
 		log.Errorf("Failure to serialize L2 add args: %v", l2Args)
 		return err
@@ -273,7 +301,7 @@ func (d *Driver) createL2ForwardModule(module L2Forward) error {
 	l2module := &bess_pb.CreateModuleRequest{
 		Name:   module.Name,
 		Mclass: L2FORWARD,
-		Arg:    any,
+		Arg:    l2Any,
 	}
 
 	return d.createModule(l2module)
@@ -305,32 +333,65 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 		matchingConn := false
 		// We now need to get eGate for connecting module
 		var eGate network.Gate
+		var realModNames []string
 		realModName := mod1.GetName()
-		// If module is a Switch we know in BESS this next module must be an l2forward so fix name
+		// If module is a Switch we know in BESS this M2 must be wired to the replicate and forward parts of Switch
+		// for egress traffic
 		if reflect.TypeOf(mod1) == reflect.TypeOf(&network.Switch{}) {
-			realModName = fmt.Sprintf("%s_replicate", mod1.GetName())
-		}
-		for gate, mod2 := range mod1.GetEGateMap() {
-			if mod2 == module {
-				eGate = gate
-				log.Debugf("Matching Egate found for module: %s, gate %d", mod1.GetName(), eGate)
-				matchingConn = true
-				break
-			}
+			realModNames = append(realModNames, fmt.Sprintf("%s_replicate", mod1.GetName()))
+			realModNames = append(realModNames, fmt.Sprintf("%s_l2forward", mod1.GetName()))
+		} else {
+			realModNames = append(realModNames, realModName)
 		}
 
-		if matchingConn {
-			connReq := &bess_pb.ConnectModulesRequest{
-				M1:    realModName,
-				M2:    module.GetName(),
-				Igate: uint64(iGate),
-				Ogate: uint64(eGate),
-			}
-			if !d.connExists(connReq) {
-				if err := d.connectModules(connReq); err != nil {
-					return err
+		for _, modName := range realModNames {
+			for gate, mod2 := range mod1.GetEGateMap() {
+				if mod2 == module {
+					eGate = gate
+					log.Debugf("Matching Egate found for module: %s, gate %d", modName, eGate)
+					matchingConn = true
+					break
 				}
 			}
+
+			if matchingConn {
+				connReq := &bess_pb.ConnectModulesRequest{
+					M1:    modName,
+					M2:    module.GetName(),
+					Igate: uint64(iGate),
+					Ogate: uint64(eGate),
+				}
+				if !d.connExists(connReq) {
+					if err := d.connectModules(connReq); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		// If module was a switch and we wired up a new egress connection to replicate, we need to update
+		// replication gates
+		if reflect.TypeOf(mod1) == reflect.TypeOf(&network.Switch{}) {
+			gates := make([]int64, eGate+1)
+			for i := range gates {
+				gates[i] = int64(i)
+			}
+			repArg := &bess_pb.ReplicateCommandSetGatesArg{Gates: gates}
+			repAny, err := ptypes.MarshalAny(repArg)
+			if err != nil {
+				log.Errorf("Failure to serialize rep gate args: %v", repArg)
+				return err
+			}
+			cmdReq := &bess_pb.CommandRequest{Name: fmt.Sprintf("%s_replicate", mod1.GetName()),
+				Cmd: "set_gates", Arg: repAny}
+			res, err := d.bessClient.ModuleCommand(d.Context, cmdReq)
+			if err != nil {
+				log.Errorf("Failed to set replication gates, error: %v", err)
+				return err
+			} else if res.GetError().GetCode() != 0 {
+				log.Errorf("Failed to set replication gates, error: %s", res.GetError().GetErrmsg())
+				return errors.New(res.GetError().GetErrmsg())
+			}
+			log.Debugf("Replication gates updated for switch %s", mod1.GetName())
 		}
 	}
 	log.Debugf("Completed wiring ingress gates for module %s", module.GetName())
@@ -432,7 +493,7 @@ func (d *Driver) createPortIncModule(module *network.IngressPort) error {
 	portArgs := &bess_pb.PortIncArg{
 		Port: module.PortName,
 	}
-	any, err := ptypes.MarshalAny(portArgs)
+	portAny, err := ptypes.MarshalAny(portArgs)
 	if err != nil {
 		log.Errorf("Failure to serialize port args: %v", portArgs)
 		return err
@@ -440,7 +501,7 @@ func (d *Driver) createPortIncModule(module *network.IngressPort) error {
 	portReq := &bess_pb.CreateModuleRequest{
 		Name:   module.Name,
 		Mclass: PORTINC,
-		Arg:    any,
+		Arg:    portAny,
 	}
 	return d.createModule(portReq)
 }
@@ -463,7 +524,7 @@ func (d *Driver) createPortOutModule(module *network.EgressPort) error {
 	portArgs := &bess_pb.PortOutArg{
 		Port: module.PortName,
 	}
-	any, err := ptypes.MarshalAny(portArgs)
+	portAny, err := ptypes.MarshalAny(portArgs)
 	if err != nil {
 		log.Errorf("Failure to serialize port args: %v", portArgs)
 		return err
@@ -471,41 +532,62 @@ func (d *Driver) createPortOutModule(module *network.EgressPort) error {
 	portReq := &bess_pb.CreateModuleRequest{
 		Name:   module.Name,
 		Mclass: PORTOUT,
-		Arg:    any,
+		Arg:    portAny,
 	}
 	return d.createModule(portReq)
 }
 
 // createPort creates a Port object in BESS and updates the Nimbess port
 func (d *Driver) createPort(port *network.Port) error {
+	var portAny *any.Any
+	var err error
 	var portDriver string
-	if port.Virtual {
-		portDriver = VPORT
-	} else {
-		return errors.New("only virtual ports currently supported")
-	}
 
 	if port.DPDK {
 		return errors.New("DPDK ports are not currently supported")
 	}
 
-	vportArg := &bess_pb.VPortArg_Netns{
-		Netns: port.NamesSpace,
+	if port.Virtual {
+		var vportArgs *bess_pb.VPortArg
+		portDriver = VPORT
+		if port.NamesSpace == "" {
+			// If no namespace, this must belong to default namespace so just provide IF Name and IP
+			vportArgs = &bess_pb.VPortArg{
+				Ifname:  port.IfaceName,
+				IpAddrs: []string{port.IPAddr},
+			}
+		} else {
+			// prepend /host dir as this is what is mounted to container
+			realNsPath := path.Join("/host", port.NamesSpace)
+			vportArg := &bess_pb.VPortArg_Netns{
+				Netns: realNsPath,
+			}
+			vportArgs = &bess_pb.VPortArg{
+				Ifname:  port.IfaceName,
+				Cpid:    vportArg,
+				IpAddrs: []string{port.IPAddr},
+			}
+		}
+		portAny, err = ptypes.MarshalAny(vportArgs)
+		if err != nil {
+			log.Errorf("Failure to serialize vport args: %v", vportArgs)
+			return errors.New("failed to serialize port args")
+		}
+	} else {
+		// Must be a kernel iface, use PCAP type port
+		portDriver = PCAPPORT
+		portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
+		portAny, err = ptypes.MarshalAny(portArg)
+		if err != nil {
+			log.Errorf("Failure to serialize kernel port args: %v", portArg)
+			return errors.New("failed to serialize port args")
+		}
 	}
-	vportArgs := &bess_pb.VPortArg{
-		Ifname:  port.IfaceName,
-		Cpid:    vportArg,
-		IpAddrs: []string{port.IPAddr},
-	}
-	any, err := ptypes.MarshalAny(vportArgs)
-	if err != nil {
-		log.Errorf("Failure to serialize vport args: %v", vportArgs)
-		return errors.New("failed to serialize port args")
-	}
+
 	portRequest := &bess_pb.CreatePortRequest{
 		Name:   port.PortName,
 		Driver: portDriver,
-		Arg:    any,
+		Arg:    portAny,
 	}
 	portRes, err := d.bessClient.CreatePort(d.Context, portRequest)
 
@@ -530,6 +612,7 @@ func objectExists(client bess_pb.BESSControlClient, object string, oType string)
 	}
 
 	if !objectSupported {
+		log.Errorf("Check for unsupported object type: %s", oType)
 		return false, fmt.Errorf("unsupported object type: %s", oType)
 	}
 
@@ -552,6 +635,7 @@ func objectExists(client bess_pb.BESSControlClient, object string, oType string)
 		modules := resp.Interface().(*bess_pb.ListModulesResponse).GetModules()
 		for _, module := range modules {
 			if module.Name == object {
+				log.Debugf("Object found: %s of type %s", object, oType)
 				return true, nil
 			}
 		}
@@ -559,11 +643,12 @@ func objectExists(client bess_pb.BESSControlClient, object string, oType string)
 		ports := resp.Interface().(*bess_pb.ListPortsResponse).GetPorts()
 		for _, port := range ports {
 			if port.Name == object {
+				log.Debugf("Object found: %s of type %s", object, oType)
 				return true, nil
 			}
 		}
 	}
-
+	log.Debugf("Object: %s of type %s does not exist", object, oType)
 	return false, nil
 }
 
@@ -572,13 +657,13 @@ func (d *Driver) AddEntryL2FIB(module *network.Switch, macAddr string, gate netw
 	log.Infof("Creating L2 BESS entry for mac: %s, gate: %d", macAddr, gate)
 	entry := &bess_pb.L2ForwardCommandAddArg_Entry{Addr: macAddr, Gate: int64(gate)}
 	addArg := &bess_pb.L2ForwardCommandAddArg{Entries: []*bess_pb.L2ForwardCommandAddArg_Entry{entry}}
-	any, err := ptypes.MarshalAny(addArg)
+	FIBAny, err := ptypes.MarshalAny(addArg)
 	if err != nil {
 		log.Errorf("Failure to serialize L2 add args: %v", addArg)
 		return err
 	}
 	l2FwdName := fmt.Sprintf("%s_l2forward", module.GetName())
-	cmd := &bess_pb.CommandRequest{Name: l2FwdName, Cmd: "add", Arg: any}
+	cmd := &bess_pb.CommandRequest{Name: l2FwdName, Cmd: "add", Arg: FIBAny}
 	res, err := d.bessClient.ModuleCommand(context.Background(), cmd)
 	if err != nil {
 		log.Errorf("Failed to add L2FIB entry: %v, error: %v", entry, err)
@@ -662,6 +747,20 @@ func (d *Driver) DeletePort(name string) error {
 		return errors.New(res.GetError().GetErrmsg())
 	} else {
 		log.Infof("Module deleted: %s", name)
+	}
+	return nil
+}
+
+// Commit handles enabling config in data plane. In BESS for now we just pause/resume
+func (d *Driver) Commit() error {
+	log.Debug("Pausing all workers in BESS")
+	if _, err := d.bessClient.PauseAll(d.Context, &bess_pb.EmptyRequest{}); err != nil {
+		log.Warningf("Unable to Pause workers in BESS: %v", err)
+	}
+	log.Debug("Resuming all workers in BESS")
+	if _, err := d.bessClient.ResumeAll(d.Context, &bess_pb.EmptyRequest{}); err != nil {
+		log.Errorf("Unable to Resume workers in BESS: %v", err)
+		return err
 	}
 	return nil
 }

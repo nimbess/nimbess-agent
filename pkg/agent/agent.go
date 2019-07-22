@@ -19,15 +19,18 @@ package agent
 import (
 	"errors"
 	"fmt"
-	"github.com/nimbess/nimbess-agent/pkg/network"
-	"net"
-	"reflect"
-	"sync"
-
+	"github.com/containernetworking/plugins/pkg/ip"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/google/uuid"
+	"github.com/nimbess/nimbess-agent/pkg/network"
 	log "github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"net"
+	"path"
+	"reflect"
+	"sync"
 
 	"github.com/nimbess/nimbess-agent/pkg/drivers"
 	"github.com/nimbess/nimbess-agent/pkg/proto/cni"
@@ -41,6 +44,7 @@ const (
 	ContainerNotExist    = 3
 	CniTryLater          = 11
 	DriverFailure        = 101
+	InternalIPAM         = "nimbess"
 )
 
 // TODO REMOVE this when IPAM is supported from CNI side
@@ -66,61 +70,17 @@ func getPortName(req *cni.CNIRequest) string {
 	return fmt.Sprintf("port_%s_%s", req.ContainerId, req.InterfaceName)
 }
 
-// Add implements CNI Add Handler.
-// It returns a CNI Reply to be sent to the Nimbess CNI client.
-func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIReply, error) {
-	// Validate/parse CNI req
-	// TODO(TROZET)
-
-	// Hardcode to Kernel veth port for now
-	// Need to make this port name unique here, so use short NS name and port name
-	portName := getPortName(req)
-	log.Infof("Received port add request for: %s", portName)
-	port := &network.Port{
-		PortName:   portName,
-		Virtual:    true,
-		DPDK:       false,
-		IfaceName:  req.GetInterfaceName(),
-		NamesSpace: req.GetNetworkNamespace(),
+// invokes IPAM either internal or external and returns the CIDR
+func invokeIPAM(ipamType string) (string, error) {
+	if ipamType == InternalIPAM {
+		ipAddr[3]++
+		return fmt.Sprintf("%s/24", ipAddr.String()), nil
 	}
+	return "", fmt.Errorf("external IPAM types are not yet supported: %s", ipamType)
+}
 
-	// Protect Pipelines and driver during modification
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
-
-	// Check if this port already has a pipeline
-	if _, ok := s.Pipelines[portName]; ok {
-		log.Error("Pod already exists, invalid CNI ADD call")
-		return &cni.CNIReply{Result: CniIncompatible}, errors.New("pod already exists, invalid CNI ADD call")
-	}
-	// Call External IPAM
-	// TODO FIXME hack this for now for testing
-	ipAddr[3]++
-	port.IPAddr = fmt.Sprintf("%s/24", ipAddr.String())
-
-	// Initialize pipeline
-	// Check if meta pipeline exists for this network
-	var metaKey string
-	if s.Config.Network.Driver == L2DriverMode {
-		metaKey = req.NetworkConfig.GetName()
-	} else {
-		log.Error("Only L2 Network Driver mode is currently supported")
-		return &cni.CNIReply{Result: CniIncompatible}, errors.New("Network Driver mode unsupported")
-	}
-
-	if _, ok := s.MetaPipelines[metaKey]; !ok {
-		log.Infof("Meta Pipeline missing for: %s, creating.", metaKey)
-
-		s.MetaPipelines[metaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", metaKey),
-			MetaKey: metaKey, Modules: make([]network.PipelineModule, 0),
-			EgressPorts: make([]*network.EgressPort, 0)}
-		if err := s.MetaPipelines[metaKey].Init("", L2DriverMode, nil); err != nil {
-			log.Error("Error while initializing MetaPipeline: %v", err)
-			return &cni.CNIReply{Result: CniIncompatible}, err
-		}
-
-	}
-
+func (s *NimbessAgent) createPortPipeline(port *network.Port, metaKey string) (*cni.CNIReply, error) {
+	portName := port.PortName
 	// Init Port Pipeline
 	s.Pipelines[portName] = &NimbessPipeline{Mu: s.Mu, Driver: s.Driver, MetaKey: metaKey,
 		Name: fmt.Sprintf("%s_pipeline", portName), Modules: make([]network.PipelineModule, 0),
@@ -164,6 +124,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	cniIfIP := &cni.CNIReply_Interface_IP{
 		Version: cni.CNIReply_Interface_IP_IPV4,
 		Address: port.IPAddr,
+		Gateway: port.Gateway,
 	}
 
 	cniIf := &cni.CNIReply_Interface{
@@ -172,11 +133,149 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		IpAddresses: []*cni.CNIReply_Interface_IP{cniIfIP},
 	}
 	log.Debugf("CNI Reply IfIP: %+v, Interfaces: %+v", cniIfIP, cniIf)
+
+	s.Driver.Commit()
+
+	// Create default GW route in NS
+	if port.Gateway != "" {
+		log.Infof("Adding default gateway: %s for port %s, ns: %s", port.Gateway, port.PortName, port.NamesSpace)
+		// container mounts to /host/proc so prepend
+		realNsPath := path.Join("/host", port.NamesSpace)
+		netns, err := ns.GetNS(realNsPath)
+		if err != nil {
+			log.Errorf("Error while opening namespace: %s: %v", realNsPath, err)
+			return &cni.CNIReply{}, fmt.Errorf("failed to open netns %s: %v", realNsPath, err)
+		}
+		defer netns.Close()
+		if err := netns.Do(func(_ ns.NetNS) error {
+			link, err := netlink.LinkByName(port.IfaceName)
+			if err != nil {
+				return fmt.Errorf("interface name %s not found in NS", port.IfaceName)
+			}
+			if err := ip.AddDefaultRoute(net.ParseIP(port.Gateway), link); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			log.Errorf("Error while adding default gateway to NS: %v", err)
+			return &cni.CNIReply{}, err
+		}
+	}
 	return &cni.CNIReply{
 		Result:     CniOk,
 		Error:      "",
 		Interfaces: []*cni.CNIReply_Interface{cniIf},
 	}, nil
+}
+
+// Add implements CNI Add Handler.
+// It returns a CNI Reply to be sent to the Nimbess CNI client.
+func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIReply, error) {
+	// Validate/parse CNI req
+	// TODO(TROZET)
+
+	// Hardcode to Kernel veth port for now
+	// Need to make this port name unique here, so use short NS name and port name
+	portName := getPortName(req)
+	log.Infof("Received port add request for: %s, req: %+v", portName, req)
+	port := &network.Port{
+		PortName:   portName,
+		Virtual:    true,
+		DPDK:       false,
+		IfaceName:  req.GetInterfaceName(),
+		NamesSpace: req.GetNetworkNamespace(),
+	}
+
+	// Protect Pipelines and driver during modification
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	// Check if this port already has a pipeline
+	if _, ok := s.Pipelines[portName]; ok {
+		log.Error("Pod already exists, invalid CNI ADD call")
+		return &cni.CNIReply{Result: CniIncompatible}, errors.New("pod already exists, invalid CNI ADD call")
+	}
+	// Check IPAM
+	// TODO(trozet) add support for checking incoming IPAM
+	var err error
+	if port.IPAddr, err = invokeIPAM(InternalIPAM); err != nil {
+		return &cni.CNIReply{Result: CniIncompatible}, err
+	}
+
+	// Initialize pipeline
+	// Check if meta pipeline exists for this network
+	var metaKey string
+	if s.Config.Network.Driver == L2DriverMode {
+		metaKey = req.NetworkConfig.GetName()
+	} else {
+		log.Error("Only L2 Network Driver mode is currently supported")
+		return &cni.CNIReply{Result: CniIncompatible}, errors.New("network driver mode unsupported")
+	}
+
+	if metaKey == "" {
+		log.Warning("Network Name is empty in CNI request, assuming k8s-pod-network")
+		metaKey = "k8s_pod_network"
+	}
+
+	if _, ok := s.MetaPipelines[metaKey]; !ok {
+		log.Infof("Meta Pipeline missing for: %s, creating.", metaKey)
+
+		s.MetaPipelines[metaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", metaKey),
+			MetaKey: metaKey, Modules: make([]network.PipelineModule, 0),
+			EgressPorts: make([]*network.EgressPort, 0)}
+		if err := s.MetaPipelines[metaKey].Init("", L2DriverMode, nil); err != nil {
+			log.Error("Error while initializing MetaPipeline: %v", err)
+			return &cni.CNIReply{Result: CniIncompatible}, err
+		}
+
+		// New metaKey in CNI Add means this must be the default network, need to add host interface if it exists
+		// This interface is for pod to pod traffic and targeted to be high speed interface
+		// TODO(trozet) add DPDK port on other meta network if defined, otherwise use kernel IF as slow path
+		if s.Config.KernelIF != "" {
+			kernIface := s.Config.KernelIF
+			log.Infof("Initializing Port Pipeline for Kernel Interface %s", kernIface)
+			kernPort := &network.Port{
+				PortName:  s.Config.KernelIF,
+				Virtual:   false,
+				DPDK:      false,
+				IfaceName: s.Config.KernelIF,
+			}
+
+			res, err := s.createPortPipeline(kernPort, metaKey)
+			if err != nil {
+				log.Errorf("Error while creating kernel interface: %v", err)
+				return &cni.CNIReply{Result: CniIncompatible}, err
+			}
+			log.Infof("Kernel Port created: %v in meta network: %s", res.GetInterfaces(), metaKey)
+		}
+		// Create Kernel VPort for host networking and default routing for the pod
+		log.Info("Creating Kernel Virtual Port")
+		kernVPort := &network.Port{
+			PortName:  "nimbess0",
+			Virtual:   true,
+			DPDK:      false,
+			IfaceName: "nimbess0",
+		}
+		// Kernel VPort needs an IP, which will be the default gateway for all pods on this node
+		var err error
+		if kernVPort.IPAddr, err = invokeIPAM(InternalIPAM); err != nil {
+			return &cni.CNIReply{Result: CniIncompatible}, err
+		}
+		ip, _, err := net.ParseCIDR(kernVPort.IPAddr)
+		s.MetaPipelines[metaKey].Gateway = ip.String()
+
+		res, err := s.createPortPipeline(kernVPort, metaKey)
+		if err != nil {
+			log.Errorf("Error while creating kernel virtual interface: %v", err)
+			return &cni.CNIReply{Result: CniIncompatible}, err
+		}
+		log.Infof("Kernel Virtual Port created: %v in meta network: %s", res.GetInterfaces(), metaKey)
+	}
+
+	// Set gateway for port to be host VPort
+	port.Gateway = s.MetaPipelines[metaKey].Gateway
+	// Create Port Pipeline
+	return s.createPortPipeline(port, metaKey)
 }
 
 // updateL2FIB adds a new FIB entry to a Pipeline's forwarder
@@ -269,20 +368,12 @@ func (s *NimbessAgent) updatePipelinesEgress(port *network.EgressPort, excludedK
 // removeEgressPort removes an Egress Port from a Meta Pipeline by name
 func (s *NimbessAgent) removeEgressPort(name string, metaKey string) error {
 	log.Debugf("Removing Egress Port: %s", name)
-	if len(s.MetaPipelines[metaKey].EgressPorts) == 1 {
-		if s.MetaPipelines[metaKey].EgressPorts[0].GetName() == name {
-			log.Debugf("Found egress port for removal from Meta Pipeline: %s", name)
-			s.MetaPipelines[metaKey].EgressPorts = nil
-			return nil
-		}
-		log.Error("Failed to find Egress Port in MetaPipeline: %s", metaKey)
-		return fmt.Errorf("unable to find egress port %s to remove in metapipeline with key: %s", name, metaKey)
-	}
 	for idx, ePort := range s.MetaPipelines[metaKey].EgressPorts {
 		if ePort.GetName() == name {
 			log.Debugf("Found egress port for removal from Meta Pipeline: %s", name)
 			s.MetaPipelines[metaKey].EgressPorts = append(s.MetaPipelines[metaKey].EgressPorts[:idx],
-				s.MetaPipelines[metaKey].EgressPorts[idx+1])
+				s.MetaPipelines[metaKey].EgressPorts[idx+1:]...)
+			log.Debugf("Egress Ports in Metapipeline: %v", s.MetaPipelines[metaKey].EgressPorts)
 			return nil
 		}
 	}
@@ -328,10 +419,17 @@ func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CN
 	if err := s.Driver.DeleteModules(modules, true); err != nil {
 		return &cni.CNIReply{Result: DriverFailure}, err
 	}
+	// Need to disconnect all other egress ports from pipeline
+	if err := s.Pipelines[portName].DisconnectPipeline(reflect.TypeOf(&network.EgressPort{})); err != nil {
+		return &cni.CNIReply{Result: DriverFailure}, err
+	}
+
 	// Remove egress port from MetaPipeline Egress Ports slice
 	if err := s.removeEgressPort(fmt.Sprintf("%s_egress", portName), s.Pipelines[portName].MetaKey); err != nil {
 		return &cni.CNIReply{Result: DriverFailure}, err
 	}
+
+	s.Driver.Commit()
 
 	log.Infof("Delete for req is successful: %+v", req)
 	delete(s.Pipelines, portName)
