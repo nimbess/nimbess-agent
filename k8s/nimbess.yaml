@@ -14,7 +14,7 @@ data:
         "log_level": "info",
         "grpcServer": "localhost:9111",
         "ipam": {
-            "type": "whereabouts"
+            "type": "nimbess"
         }
     }
 
@@ -50,9 +50,34 @@ spec:
         - operator: Exists
           effect: NoSchedule
       containers:
+        - name: bess
+          image: nimbess/bess
+          command: ["./bin/bessd"]
+          args: ["-f", "-log_dir", "/var/log/bess"]
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              hugepages-2Mi: 1Gi
+              memory: 2Gi
+            limits:
+              hugepages-2Mi: 1Gi
+              memory: 2Gi
+          volumeMounts:
+            - mountPath: /dev/hugepages
+              name: hugepages
+            - mountPath: /host/proc
+              name: proc-dir
         - name: nimbess-agent
           image: nimbess/nimbess-agent
           command: ["/nimbess-agent"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /etc/nimbess/agent/
+              name: agent-conf-dir
+            - mountPath: /host/proc
+              name: proc-dir
         # This container installs the Nimbess CNI binary
         # and CNI network config file on each node.
         - name: install-cni
@@ -78,3 +103,12 @@ spec:
         - name: cni-net-dir
           hostPath:
             path: /etc/cni/net.d
+        - name: hugepages
+          hostPath:
+            path: /dev/hugepages
+        - name: proc-dir
+          hostPath:
+            path: /proc
+        - name: agent-conf-dir
+          hostPath:
+            path: /etc/nimbess/agent/

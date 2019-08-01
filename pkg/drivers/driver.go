@@ -28,6 +28,7 @@ type Driver interface {
 	DeleteModules(modules []network.PipelineModule, egress bool) error
 	DeletePort(name string) error
 	AddEntryL2FIB(module *network.Switch, macAddr string, gate network.Gate) error
+	Commit() error
 }
 
 // DriverConfig represents the generic driver configuration required by Driver.
@@ -37,6 +38,5 @@ type DriverConfig struct {
 	TunnelMode  bool
 	FIBSize     int64
 	Port        int
-	PCIDevices  []string
 	WorkerCores []int64
 }

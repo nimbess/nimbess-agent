@@ -17,7 +17,6 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"github.com/mohae/deepcopy"
 	"reflect"
@@ -37,6 +36,7 @@ type NimbessPipeline struct {
 	Driver      drivers.Driver
 	EgressPorts []*network.EgressPort
 	MetaKey     string
+	Gateway     string
 }
 
 // GetModule returns the module
@@ -54,9 +54,6 @@ func (s *NimbessPipeline) GetModule(name string) network.PipelineModule {
 // AddPort adds a port to a pipeline.
 // It returns a pointer to a EgressPort module to update other pipelines with
 func (s *NimbessPipeline) AddPort(name string, port *network.Port) (*network.EgressPort, error) {
-	if !port.Virtual {
-		return nil, errors.New("physical ports are not yet supported")
-	}
 	log.Infof("Adding new port %v to pipeline: %v", port, s.Name)
 	portMod := network.Module{Name: fmt.Sprintf("%s_ingress", name),
 		EGates: make(map[network.Gate]network.PipelineModule)}
@@ -188,6 +185,28 @@ func (s *NimbessPipeline) GetLastModule(excludedTypes []reflect.Type) network.Pi
 
 	}
 
+	return nil
+}
+
+// DisconnectPipeline disconnects any modules of type modType that are attached to the last module in a pipeline
+func (s *NimbessPipeline) DisconnectPipeline(modType reflect.Type) error {
+	log.Debugf("Searching for modules to disconnect from pipeline %s of type %s", s.Name, modType.Name())
+	lastMod := s.GetLastModule([]reflect.Type{modType})
+	if lastMod == nil {
+		return fmt.Errorf("could not find last module in pipeline %s for disconnect", s.Name)
+	}
+	for egate, mod := range lastMod.GetEGateMap() {
+		// search gates in connecting module to remove
+		for igate, iMod := range mod.GetIGateMap() {
+			if iMod == lastMod {
+				log.Debugf("Disconnecting gate %d on module %s, which points to %s", igate, mod.GetName(),
+					iMod.GetName())
+				mod.Disconnect(igate, false)
+				break
+			}
+		}
+		lastMod.Disconnect(egate, true)
+	}
 	return nil
 }
 

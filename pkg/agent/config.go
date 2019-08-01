@@ -43,11 +43,12 @@ type Network struct {
 
 // NimbessConfig contains the generic Nimbess Agent configuration.
 type NimbessConfig struct {
-	Port          int      `mapstructure:"agent_port"`
-	DataPlane     string   `mapstructure:"data_plane"`
-	DataPlanePort int      `mapstructure:"data_plane_port"`
-	WorkerCores   []int64  `mapstructure:"worker_cores"`
-	NICs          []string `mapstructure:"pci_devices"`
+	Port          int     `mapstructure:"agent_port"`
+	DataPlane     string  `mapstructure:"data_plane"`
+	DataPlanePort int     `mapstructure:"data_plane_port"`
+	WorkerCores   []int64 `mapstructure:"worker_cores"`
+	KernelIF      string  `mapstructure:"kernel_interface"`
+	FastPathIF    string  `mapstructure:"high_speed_interface"`
 	Network
 }
 
@@ -78,7 +79,7 @@ func InitConfig(cfgPath string) *NimbessConfig {
 	if err != nil {
 		log.Fatalf("Unable to parse Nimbess config: %v", err)
 	} else {
-		log.Infof("Configuration parsed as: +%v", cfg)
+		log.Infof("Configuration parsed as: %+v", cfg)
 	}
 	return cfg
 }

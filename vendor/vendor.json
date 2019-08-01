@@ -16,6 +16,52 @@
 			"revisionTime": "2018-11-01T15:39:34Z"
 		},
 		{
+			"checksumSHA1": "Dhi4+8X7U2oVzVkgxPrmLaN8qFI=",
+			"origin": "github.com/containernetworking/plugins/vendor/github.com/containernetworking/cni/pkg/types",
+			"path": "github.com/containernetworking/cni/pkg/types",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
+			"checksumSHA1": "6+ng8oaM9SB0TyCE7I7N940IpPY=",
+			"origin": "github.com/containernetworking/plugins/vendor/github.com/containernetworking/cni/pkg/types/020",
+			"path": "github.com/containernetworking/cni/pkg/types/020",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
+			"checksumSHA1": "X6dNZ3yc3V9ffW9vz4yIyeKXGD0=",
+			"origin": "github.com/containernetworking/plugins/vendor/github.com/containernetworking/cni/pkg/types/current",
+			"path": "github.com/containernetworking/cni/pkg/types/current",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
+			"checksumSHA1": "LTsIp3CxydS38W9whhqj4aWShBg=",
+			"path": "github.com/containernetworking/plugins/pkg/ip",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
+			"checksumSHA1": "n3dCDigZOU+eD84Cr4Kg30GO4nI=",
+			"path": "github.com/containernetworking/plugins/pkg/ns",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
+			"checksumSHA1": "rUAk+nce6eDIWtYo/QYIoqlTfrY=",
+			"path": "github.com/containernetworking/plugins/pkg/utils/hwaddr",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
+			"checksumSHA1": "tKFoM5uHIwiddsEpOadY325vURI=",
+			"origin": "github.com/containernetworking/plugins/vendor/github.com/coreos/go-iptables/iptables",
+			"path": "github.com/coreos/go-iptables/iptables",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
 			"checksumSHA1": "Gj+xR1VgFKKmFXYOJMnAczC3Znk=",
 			"origin": "github.com/docker/docker/vendor/github.com/docker/distribution/digestset",
 			"path": "github.com/docker/distribution/digestset",
@@ -333,6 +379,13 @@
 			"revisionTime": "2018-11-01T15:39:34Z"
 		},
 		{
+			"checksumSHA1": "sdkUNIxS+39OB5wZ+6+A/QAh/PA=",
+			"origin": "github.com/containernetworking/plugins/vendor/github.com/safchain/ethtool",
+			"path": "github.com/safchain/ethtool",
+			"revision": "966bbcb8a572aa4c253ea9650888ad2306e3c8f2",
+			"revisionTime": "2019-07-10T15:04:52Z"
+		},
+		{
 			"checksumSHA1": "SVO+Zm6SNwWrpgyc6mcTXbH4aJ8=",
 			"path": "github.com/sirupsen/logrus",
 			"revision": "2a22dbedbad1fd454910cd1f44f210ef90c28464",
@@ -373,6 +426,24 @@
 			"path": "github.com/spf13/viper",
 			"revision": "62edee319679b6ceaec16de03b966102d2dea709",
 			"revisionTime": "2018-09-30T04:41:27Z"
+		},
+		{
+			"checksumSHA1": "c0f+DTMGSevLzIjo6IsuzWQpMbc=",
+			"path": "github.com/vishvananda/netlink",
+			"revision": "aa5b058fc07b88462111aaf4f7c89f1caee9c990",
+			"revisionTime": "2018-09-30T20:42:25Z"
+		},
+		{
+			"checksumSHA1": "UuqmIIrT/U4WxsIG7TNEeAvFZ74=",
+			"path": "github.com/vishvananda/netlink/nl",
+			"revision": "aa5b058fc07b88462111aaf4f7c89f1caee9c990",
+			"revisionTime": "2018-09-30T20:42:25Z"
+		},
+		{
+			"checksumSHA1": "8Y8hkjXEkSXBzI/dIdJPXYlGu24=",
+			"path": "github.com/vishvananda/netns",
+			"revision": "13995c7128ccc8e51e9a6bd2b551020a27180abd",
+			"revisionTime": "2018-07-20T11:23:40Z"
 		},
 		{
 			"checksumSHA1": "7G5NVR7TOpJn0CSpofyLaDrZXMs=",
