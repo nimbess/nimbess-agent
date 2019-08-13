@@ -38,6 +38,7 @@ const (
 	PORT      = "Port"
 	MODULE    = "Module"
 	VPORT     = "VPort"
+	PMDPORT   = "PMDPort"
 	PCAPPORT  = "PCAPPort"
 	PORTOUT   = "PortOut"
 	PORTINC   = "PortInc"
@@ -543,37 +544,49 @@ func (d *Driver) createPort(port *network.Port) error {
 	var err error
 	var portDriver string
 
-	if port.DPDK {
-		return errors.New("DPDK ports are not currently supported")
-	}
-
 	if port.Virtual {
-		var vportArgs *bess_pb.VPortArg
-		portDriver = VPORT
-		if port.NamesSpace == "" {
-			// If no namespace, this must belong to default namespace so just provide IF Name and IP
-			vportArgs = &bess_pb.VPortArg{
-				Ifname:  port.IfaceName,
-				IpAddrs: []string{port.IPAddr},
+		if port.DPDK {
+			portDriver = PMDPORT
+			vdevArg := &bess_pb.PMDPortArg_Vdev{
+				Vdev: fmt.Sprintf("%s,iface=%s", port.IfaceName, port.SocketPath),
+			}
+			pmdPortArg := &bess_pb.PMDPortArg{Port: vdevArg}
+			portAny, err = ptypes.MarshalAny(pmdPortArg)
+			if err != nil {
+				log.Errorf("Failure to serialize PMD port args: %v", pmdPortArg)
+				return errors.New("failed to serialize port args")
 			}
 		} else {
-			// prepend /host dir as this is what is mounted to container
-			realNsPath := path.Join("/host", port.NamesSpace)
-			vportArg := &bess_pb.VPortArg_Netns{
-				Netns: realNsPath,
+			var vportArgs *bess_pb.VPortArg
+			portDriver = VPORT
+			if port.NamesSpace == "" {
+				// If no namespace, this must belong to default namespace so just provide IF Name and IP
+				vportArgs = &bess_pb.VPortArg{
+					Ifname:  port.IfaceName,
+					IpAddrs: []string{port.IPAddr},
+				}
+			} else {
+				// prepend /host dir as this is what is mounted to container
+				realNsPath := path.Join("/host", port.NamesSpace)
+				vportArg := &bess_pb.VPortArg_Netns{
+					Netns: realNsPath,
+				}
+				vportArgs = &bess_pb.VPortArg{
+					Ifname:  port.IfaceName,
+					Cpid:    vportArg,
+					IpAddrs: []string{port.IPAddr},
+				}
 			}
-			vportArgs = &bess_pb.VPortArg{
-				Ifname:  port.IfaceName,
-				Cpid:    vportArg,
-				IpAddrs: []string{port.IPAddr},
+			portAny, err = ptypes.MarshalAny(vportArgs)
+			if err != nil {
+				log.Errorf("Failure to serialize vport args: %v", vportArgs)
+				return errors.New("failed to serialize port args")
 			}
-		}
-		portAny, err = ptypes.MarshalAny(vportArgs)
-		if err != nil {
-			log.Errorf("Failure to serialize vport args: %v", vportArgs)
-			return errors.New("failed to serialize port args")
 		}
 	} else {
+		if port.DPDK {
+			return errors.New("DPDK physical ports are not currently supported")
+		}
 		// Must be a kernel iface, use PCAP type port
 		portDriver = PCAPPORT
 		portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
@@ -634,6 +647,7 @@ func objectExists(client bess_pb.BESSControlClient, object string, oType string)
 	case "*bess_pb.ListModulesResponse":
 		modules := resp.Interface().(*bess_pb.ListModulesResponse).GetModules()
 		for _, module := range modules {
+			log.Debugf("Iterating through module: %s", module.Name)
 			if module.Name == object {
 				log.Debugf("Object found: %s of type %s", object, oType)
 				return true, nil
@@ -642,6 +656,7 @@ func objectExists(client bess_pb.BESSControlClient, object string, oType string)
 	case "*bess_pb.ListPortsResponse":
 		ports := resp.Interface().(*bess_pb.ListPortsResponse).GetPorts()
 		for _, port := range ports {
+			log.Debugf("Iterating through port: %s", port.Name)
 			if port.Name == object {
 				log.Debugf("Object found: %s of type %s", object, oType)
 				return true, nil

@@ -19,14 +19,20 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/google/uuid"
+	"github.com/intel/userspace-cni-network-plugin/usrsptypes"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	v1_types "k8s.io/api/core/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 	"net"
 	"path"
 	"reflect"
@@ -34,6 +40,7 @@ import (
 
 	"github.com/nimbess/nimbess-agent/pkg/drivers"
 	"github.com/nimbess/nimbess-agent/pkg/proto/cni"
+	"github.com/nimbess/nimbess-agent/pkg/userspace"
 )
 
 // CNI Reply Values
@@ -44,21 +51,30 @@ const (
 	ContainerNotExist    = 3
 	CniTryLater          = 11
 	DriverFailure        = 101
+	FastPathFailure      = 102
 	InternalIPAM         = "nimbess"
+	FastPathNetwork      = "fastpath"
+	DefaultBaseCNIDir    = "/var/lib/nimbess/cni"
+	DefaultPodNs         = "default"
 )
 
-// TODO REMOVE this when IPAM is supported from CNI side
+// For internal Nimbess IPAM
 var ipAddr = net.IP{40, 0, 0, 0}
+var ipAddrFast = net.IP{50, 0, 0, 0}
+
+// Used to track BESS vhost PMD Ports
+var vhostIndex = 0
 
 // NimbessAgent represents the agent runtime server.
 // It contains a loadable runtime data plane driver to manage the data plane.
 // It includes a mutex used to handle locking between driver and agent events to force a
 // single-processed event pipeline.
 type NimbessAgent struct {
-	ID     uuid.UUID
-	Mu     *sync.Mutex
-	Config *NimbessConfig
-	Driver drivers.Driver
+	ID         uuid.UUID
+	Mu         *sync.Mutex
+	Config     *NimbessConfig
+	Driver     drivers.Driver
+	KubeClient kubernetes.Interface
 	// Pipelines contains a map of port name to pipeline pointer
 	Pipelines map[string]*NimbessPipeline
 	// MetaPipelines contains a map of network name to abstract pipelines
@@ -71,8 +87,12 @@ func getPortName(req *cni.CNIRequest) string {
 }
 
 // invokes IPAM either internal or external and returns the CIDR
-func invokeIPAM(ipamType string) (string, error) {
+func invokeIPAM(ipamType string, fastPath bool) (string, error) {
 	if ipamType == InternalIPAM {
+		if fastPath {
+			ipAddrFast[3]++
+			return fmt.Sprintf("%s/24", ipAddrFast.String()), nil
+		}
 		ipAddr[3]++
 		return fmt.Sprintf("%s/24", ipAddr.String()), nil
 	}
@@ -134,6 +154,10 @@ func (s *NimbessAgent) createPortPipeline(port *network.Port, metaKey string) (*
 	}
 	log.Debugf("CNI Reply IfIP: %+v, Interfaces: %+v", cniIfIP, cniIf)
 
+	// TODO(trozet): There may be a potential race condition where driver commit is called and this function
+	// returns before the objects actually exist in the data plane. The issue is that a CNI DEL may immediately
+	// follow the CNI ADD, and the objects may not exist yet in the data plane. May need to add a check in the commit
+	// that the objects exist in the data plane before returning from it.
 	s.Driver.Commit()
 
 	// Create default GW route in NS
@@ -161,6 +185,7 @@ func (s *NimbessAgent) createPortPipeline(port *network.Port, metaKey string) (*
 			return &cni.CNIReply{}, err
 		}
 	}
+	log.Debug("CNI ADD complete")
 	return &cni.CNIReply{
 		Result:     CniOk,
 		Error:      "",
@@ -174,7 +199,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	// Validate/parse CNI req
 	// TODO(TROZET)
 
-	// Hardcode to Kernel veth port for now
+	// Create Kernel veth port for default network
 	// Need to make this port name unique here, so use short NS name and port name
 	portName := getPortName(req)
 	log.Infof("Received port add request for: %s, req: %+v", portName, req)
@@ -198,7 +223,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	// Check IPAM
 	// TODO(trozet) add support for checking incoming IPAM
 	var err error
-	if port.IPAddr, err = invokeIPAM(InternalIPAM); err != nil {
+	if port.IPAddr, err = invokeIPAM(InternalIPAM, false); err != nil {
 		return &cni.CNIReply{Result: CniIncompatible}, err
 	}
 
@@ -258,7 +283,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		}
 		// Kernel VPort needs an IP, which will be the default gateway for all pods on this node
 		var err error
-		if kernVPort.IPAddr, err = invokeIPAM(InternalIPAM); err != nil {
+		if kernVPort.IPAddr, err = invokeIPAM(InternalIPAM, false); err != nil {
 			return &cni.CNIReply{Result: CniIncompatible}, err
 		}
 		ip, _, err := net.ParseCIDR(kernVPort.IPAddr)
@@ -272,9 +297,81 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		log.Infof("Kernel Virtual Port created: %v in meta network: %s", res.GetInterfaces(), metaKey)
 	}
 
+	// Create FastPath secondary Network
+	fastMetaKey := fmt.Sprintf("%s-%s", metaKey, FastPathNetwork)
+	if _, ok := s.MetaPipelines[fastMetaKey]; !ok {
+		log.Infof("Meta Pipeline missing for: %s, creating.", fastMetaKey)
+
+		s.MetaPipelines[fastMetaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", fastMetaKey),
+			MetaKey: fastMetaKey, Modules: make([]network.PipelineModule, 0),
+			EgressPorts: make([]*network.EgressPort, 0)}
+		if err := s.MetaPipelines[fastMetaKey].Init("", L2DriverMode, nil); err != nil {
+			log.Error("Error while initializing MetaPipeline: %v", err)
+			return &cni.CNIReply{Result: CniIncompatible}, err
+		}
+	}
+	fastPortName := fmt.Sprintf("%s-%s", portName, FastPathNetwork)
+	// Right now we only support DPDK fast path, but in the future make this configurable for alternate
+	// FastPaths like XDP
+	fastPortIP, err := invokeIPAM(InternalIPAM, true)
+	if err != nil {
+		return &cni.CNIReply{Result: CniIncompatible}, err
+	}
+	fastPort := &network.Port{
+		PortName:   fastPortName,
+		Virtual:    true,
+		DPDK:       true,
+		IPAddr:     fastPortIP,
+		IfaceName:  fmt.Sprintf("eth_vhost%d", vhostIndex),
+		SocketPath: fmt.Sprintf("%s/%s_vhost.sock", DefaultBaseCNIDir, req.ContainerId),
+	}
+	vhostIndex++
+	res, err := s.createPortPipeline(fastPort, fastMetaKey)
+	if err != nil {
+		log.Errorf("Error while creating FastPath virtual interface: %v", err)
+		return &cni.CNIReply{Result: FastPathFailure}, err
+	}
+	log.Infof("FastPath Virtual Port created: %v in meta network: %s", res.GetInterfaces(), fastMetaKey)
+
+	// Create configuration data to prepare for annotation
+	fastIP, fastNet, err := net.ParseCIDR(fastPort.IPAddr)
+	if err != nil {
+		return &cni.CNIReply{Result: FastPathFailure}, fmt.Errorf("Failed to parse FP IP: %s", fastPort.IPAddr)
+	}
+	ipConf := &current.IPConfig{
+		Address: net.IPNet{IP: fastIP, Mask: fastNet.Mask},
+	}
+	ifConf := &current.Interface{
+		Name: fastPort.IfaceName,
+		Mac:  fastPort.MacAddr,
+	}
+	ipRes := current.Result{
+		IPs:        []*current.IPConfig{ipConf},
+		Interfaces: []*current.Interface{ifConf},
+	}
+	vhostConf := usrsptypes.VhostConf{
+		Mode:       "client",
+		Socketfile: fastPort.SocketPath,
+	}
+	usrConf := usrsptypes.UserSpaceConf{
+		IfType:    "vhostuser",
+		VhostConf: vhostConf,
+	}
+	configData := &usrsptypes.ConfigurationData{
+		ContainerId: req.ContainerId,
+		IfName:      fastPort.IfaceName,
+		Config:      usrConf,
+		IPResult:    ipRes,
+	}
+	log.Debugf("Annotation data set as: %+v", configData)
+	if err := annotatePod(s.KubeClient, req, configData); err != nil {
+		log.Errorf("Failed to annotate Pod: %v", err)
+		return &cni.CNIReply{Result: FastPathFailure}, err
+	}
+
 	// Set gateway for port to be host VPort
 	port.Gateway = s.MetaPipelines[metaKey].Gateway
-	// Create Port Pipeline
+	// Create kernel Port Pipeline
 	return s.createPortPipeline(port, metaKey)
 }
 
@@ -391,49 +488,119 @@ func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CN
 		log.Debugf("Delete received with no namespace: %+v", req)
 		return &cni.CNIReply{Result: CniOk}, nil
 	}
-	portName := getPortName(req)
-	log.Infof("Received port del request for: %s", portName)
+	reqPortName := getPortName(req)
+	log.Infof("Received port del request for: %s", reqPortName)
 
 	// Protect Pipelines and driver during modification
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
-	// Check if this port already has a pipeline
-	if _, ok := s.Pipelines[portName]; !ok {
-		log.Infof("Port %s has no pipeline, ignoring request", portName)
-		return &cni.CNIReply{Result: CniOk}, nil
-	}
+	for _, portName := range []string{reqPortName, fmt.Sprintf("%s-%s", reqPortName, FastPathNetwork)} {
+		// Check if this port already has a pipeline
+		if _, ok := s.Pipelines[portName]; !ok {
+			log.Infof("Port %s has no pipeline, ignoring request", portName)
+			continue
+		}
 
-	// Delete all modules in the port pipeline except for egress ports
-	log.Infof("Deleting pipeline for %s", portName)
-	if err := s.Driver.DeleteModules(s.Pipelines[portName].Modules, false); err != nil {
-		return &cni.CNIReply{Result: DriverFailure}, err
-	}
+		// Delete all modules in the port pipeline except for egress ports
+		log.Infof("Deleting pipeline for %s", portName)
+		if err := s.Driver.DeleteModules(s.Pipelines[portName].Modules, false); err != nil {
+			return &cni.CNIReply{Result: DriverFailure}, err
+		}
 
-	log.Infof("Deleting egress ports for port %s", portName)
-	// Delete egress port
-	ePort := &network.EgressPort{Module: network.Module{Name: fmt.Sprintf("%s_egress", portName)},
-		Port: &network.Port{}}
-	var modules []network.PipelineModule
-	modules = append(modules, ePort)
-	if err := s.Driver.DeleteModules(modules, true); err != nil {
-		return &cni.CNIReply{Result: DriverFailure}, err
-	}
-	// Need to disconnect all other egress ports from pipeline
-	if err := s.Pipelines[portName].DisconnectPipeline(reflect.TypeOf(&network.EgressPort{})); err != nil {
-		return &cni.CNIReply{Result: DriverFailure}, err
-	}
+		log.Infof("Deleting egress ports for port %s", portName)
+		// Delete egress port
+		ePort := &network.EgressPort{Module: network.Module{Name: fmt.Sprintf("%s_egress", portName)},
+			Port: &network.Port{}}
+		var modules []network.PipelineModule
+		modules = append(modules, ePort)
+		if err := s.Driver.DeleteModules(modules, true); err != nil {
+			return &cni.CNIReply{Result: DriverFailure}, err
+		}
+		// Need to disconnect all other egress ports from pipeline
+		if err := s.Pipelines[portName].DisconnectPipeline(reflect.TypeOf(&network.EgressPort{})); err != nil {
+			return &cni.CNIReply{Result: DriverFailure}, err
+		}
 
-	// Remove egress port from MetaPipeline Egress Ports slice
-	if err := s.removeEgressPort(fmt.Sprintf("%s_egress", portName), s.Pipelines[portName].MetaKey); err != nil {
-		return &cni.CNIReply{Result: DriverFailure}, err
+		// Remove egress port from MetaPipeline Egress Ports slice
+		if err := s.removeEgressPort(fmt.Sprintf("%s_egress", portName), s.Pipelines[portName].MetaKey); err != nil {
+			return &cni.CNIReply{Result: DriverFailure}, err
+		}
+
+		// Finally delete port
+		if err := s.Driver.DeletePort(portName); err != nil {
+			return &cni.CNIReply{Result: DriverFailure}, err
+		}
+
+		s.Driver.Commit()
+
+		log.Infof("Delete for req is successful: %+v", req)
+		delete(s.Pipelines, portName)
 	}
-
-	s.Driver.Commit()
-
-	log.Infof("Delete for req is successful: %+v", req)
-	delete(s.Pipelines, portName)
 	return &cni.CNIReply{Result: CniOk}, nil
+}
+
+func annotatePod(k8sClient kubernetes.Interface, req *cni.CNIRequest, configData *usrsptypes.ConfigurationData) error {
+	log.Info("Writing pod annotation")
+	podName := req.GetPodName()
+	podNamespace := req.GetPodNamespace()
+	if podNamespace == "" {
+		podNamespace = DefaultPodNs
+	}
+	var pod *v1_types.Pod
+	// If we were not given pod name from CNI, we cannot continue
+	if podName == "" {
+		return errors.New("pod name is empty")
+	}
+	var pErr error
+	if pod, pErr = k8sClient.CoreV1().Pods(podNamespace).Get(podName, v1.GetOptions{}); pErr != nil {
+		return fmt.Errorf("unable to query pod %s, error: %v", podName, pErr)
+	}
+	log.Debugf("Pod found: %+v", pod)
+	if pod == nil {
+		return fmt.Errorf("unable to find pod for pod name: %s", podName)
+	}
+
+	var modifiedConfig, modifiedMappedDir bool
+	var err error
+	// TODO(trozet): work with userspace CNI to remove unused args and k8s custom client
+	modifiedConfig, err = userspace.SetPodAnnotationConfigData(pod, configData)
+	if err != nil {
+		return fmt.Errorf("error formatting annotation configData: %v", err)
+	}
+	// Retrieve the mappedSharedDir from the Containers in podSpec. Directory
+	// in container Socket Files will be read from. Write this data back as an
+	// annotation so container knows where directory is located.
+	mappedSharedDir, err := userspace.GetPodVolumeMountHostMappedSharedDir(pod)
+	if err != nil {
+		log.Warnf("Cannot find mapped shared dir: %v,  defaulting to: %s", err, DefaultBaseCNIDir)
+		mappedSharedDir = DefaultBaseCNIDir
+	}
+	modifiedMappedDir, err = userspace.SetPodAnnotationMappedDir(pod, mappedSharedDir)
+	if err != nil {
+		return fmt.Errorf("error setting annotation for mappedSharedDir - %v", err)
+	}
+
+	if modifiedConfig == true || modifiedMappedDir == true {
+		// Update the pod
+		pod = pod.DeepCopy()
+		if resultErr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if err != nil {
+				// Re-get the pod unless it's the first attempt to update
+				pod, err = k8sClient.CoreV1().Pods("").Get(podName, v1.GetOptions{})
+				if err != nil {
+					return err
+				}
+			}
+
+			pod, err = k8sClient.CoreV1().Pods(pod.Namespace).UpdateStatus(pod)
+			return err
+		}); resultErr != nil {
+			return fmt.Errorf("update failed for pod %s/%s: %v", pod.Namespace, pod.Name, resultErr)
+		}
+	}
+	log.Debugf("Pod annotation complete: %s", pod.Name)
+	return nil
 }
 
 // Run starts up the main Agent daemon.

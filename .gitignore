@@ -26,3 +26,4 @@ vendor/gopkg.in/
 vendor/go.uber.org/
 vendor/k8s.io/
 vendor/honnef.co/
+vendor/sigs.k8s.io/
