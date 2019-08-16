@@ -228,7 +228,7 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	// Egress gates from original Switch module will be used for L2Forward lookup match, and then
 	// also used for replicator flooding. Add Egress Gate for L2Forward -> replicator and Ingress
 	// gate for reverse
-	l2Fwd.EGates[999] = rep
+	l2Fwd.EGates[0] = rep
 	// Replicate should have no Ingress gates other than l2fwd
 	rep.IGates = make(map[network.Gate]network.PipelineModule)
 	rep.IGates[0] = l2Fwd
@@ -245,8 +245,8 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 
-	// Set default gate for l2forward to 999
-	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 999}
+	// Set default gate for l2forward to 0
+	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 0}
 	gateAny, err := ptypes.MarshalAny(gateArg)
 	if err != nil {
 		log.Errorf("Failure to serialize default gate arg: %v", gateArg)
