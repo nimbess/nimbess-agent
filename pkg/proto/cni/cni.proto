@@ -72,6 +72,12 @@ message CNIRequest {
 
   // result of the IPAM plugin if it was configured for the CNI.
   string ipam_data = 8;
+
+  // pod name
+  string pod_name = 9;
+
+  // pod namespace
+  string pod_namespace = 10;
 }
 
 // The response to the CNIRequest. Corresponds to the CNI specification

@@ -42,6 +42,7 @@ spec:
            {"key":"CriticalAddonsOnly", "operator":"Exists"},
            {"operator":"Exists"}]
     spec:
+      serviceAccountName: nimbess
       hostNetwork: true
       nodeSelector:
         beta.kubernetes.io/os: "linux"
@@ -53,7 +54,7 @@ spec:
         - name: bess
           image: nimbess/bess
           command: ["./bin/bessd"]
-          args: ["-f", "-log_dir", "/var/log/bess"]
+          args: ["-f", "-log_dir", "/var/log/bess", "-d", "true"]
           securityContext:
             privileged: true
           resources:
@@ -68,6 +69,8 @@ spec:
               name: hugepages
             - mountPath: /host/proc
               name: proc-dir
+            - mountPath: /var/lib/nimbess/cni/
+              name: shared-dir
         - name: nimbess-agent
           image: nimbess/nimbess-agent
           command: ["/nimbess-agent"]
@@ -112,3 +115,7 @@ spec:
         - name: agent-conf-dir
           hostPath:
             path: /etc/nimbess/agent/
+        - name: shared-dir
+          hostPath:
+            path: /var/lib/nimbess/cni/
+

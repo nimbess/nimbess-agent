@@ -18,6 +18,9 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	"path/filepath"
 
 	"github.com/google/uuid"
@@ -62,6 +65,26 @@ func selectDriver(config *agent.NimbessConfig) drivers.Driver {
 	return nil
 }
 
+// getK8SClient builds and returns a Kubernetes client.
+func getK8SClient(kubeconfig string) (kubernetes.Interface, error) {
+	// Build the kubeconfig.
+	if kubeconfig == "" {
+		log.Info("Using inClusterConfig")
+	}
+	k8sConfig, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build kubeconfig: %s", err)
+	}
+
+	// Get Kubernetes clientset.
+	k8sClientset, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build kubernetes clientset: %s", err)
+	}
+
+	return k8sClientset, nil
+}
+
 func main() {
 	// Determine Agent configuration
 	confFile := flag.String("config-file", ConfigFile,
@@ -87,12 +110,20 @@ func main() {
 	// Create Pipeline map of per port pipelines
 	nimbessPipelineMap := make(map[string]*agent.NimbessPipeline)
 	metaPipelineMap := make(map[string]*agent.NimbessPipeline)
+
+	// get k8s client for annotating pods
+	// force in cluster for now
+	k8sClient, err := getK8SClient("")
+	if err != nil {
+		log.WithError(err).Fatal("Failed to get k8s client api")
+	}
+
 	// Generate ID for this Agent
 	// TODO(trozet) Make this ID stored in etcd and pull at agent start
 	agentID := uuid.New()
 	// Start agent
 	nimbessAgent := agent.NimbessAgent{Mu: &sync.Mutex{}, Config: nimbessConfig, Driver: driver,
-		Pipelines: nimbessPipelineMap, ID: agentID, MetaPipelines: metaPipelineMap}
+		KubeClient: k8sClient, Pipelines: nimbessPipelineMap, ID: agentID, MetaPipelines: metaPipelineMap}
 	if err := nimbessAgent.Run(); err != nil {
 		log.Fatalf("Nimbess Agent has died: %v", err)
 	}
