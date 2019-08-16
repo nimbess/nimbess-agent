@@ -59,6 +59,7 @@ const (
 )
 
 // For internal Nimbess IPAM
+// TODO(trozet): change this to IPv6
 var ipAddr = net.IP{40, 0, 0, 0}
 var ipAddrFast = net.IP{50, 0, 0, 0}
 
@@ -88,6 +89,7 @@ func getPortName(req *cni.CNIRequest) string {
 
 // invokes IPAM either internal or external and returns the CIDR
 func invokeIPAM(ipamType string, fastPath bool) (string, error) {
+	//TODO(trozet): Add support for external IPAM
 	if ipamType == InternalIPAM {
 		if fastPath {
 			ipAddrFast[3]++
@@ -297,7 +299,9 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		log.Infof("Kernel Virtual Port created: %v in meta network: %s", res.GetInterfaces(), metaKey)
 	}
 
-	// Create FastPath secondary Network
+	// Create FastPath Network
+	// TODO(trozet): In the future remove automatically creating a pipeline/network for the port. We will rely on
+	// UNP to pass the configuration for how the port should be used and at CNI add time only create the Port itself
 	fastMetaKey := fmt.Sprintf("%s-%s", metaKey, FastPathNetwork)
 	if _, ok := s.MetaPipelines[fastMetaKey]; !ok {
 		log.Infof("Meta Pipeline missing for: %s, creating.", fastMetaKey)
