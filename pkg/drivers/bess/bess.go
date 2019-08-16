@@ -39,6 +39,7 @@ const (
 	MODULE    = "Module"
 	VPORT     = "VPort"
 	PCAPPORT  = "PCAPPort"
+	UNIXPORT  = "UnixSocketPort"
 	PORTOUT   = "PortOut"
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
@@ -547,7 +548,15 @@ func (d *Driver) createPort(port *network.Port) error {
 		return errors.New("DPDK ports are not currently supported")
 	}
 
-	if port.Virtual {
+        if port.UnixSocket {
+		portDriver = UNIXPORT
+		portArg := &bess_pb.UnixSocketPortArg{Path: port.UnixPath}
+		portAny, err = ptypes.MarshalAny(portArg)
+		if err != nil {
+			log.Errorf("Failure to serialize kernel port args: %v", portArg)
+			return errors.New("failed to serialize port args")
+		}
+        } else if port.Virtual {
 		var vportArgs *bess_pb.VPortArg
 		portDriver = VPORT
 		if port.NamesSpace == "" {

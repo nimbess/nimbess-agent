@@ -63,12 +63,14 @@ type Port struct {
 	PortName   string
 	Virtual    bool
 	DPDK       bool
+        UnixSocket bool
 	IfaceName  string
 	Network    string
 	NamesSpace string
 	IPAddr     string
 	MacAddr    string
 	Gateway    string
+        UnixPath   string //used in Socket Port and DPDK vhost-user
 }
 
 // IngressPort represents the RX side of a network interface
