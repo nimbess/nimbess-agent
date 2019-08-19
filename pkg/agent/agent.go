@@ -209,6 +209,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		PortName:   portName,
 		Virtual:    true,
 		DPDK:       false,
+                UnixSocket: false,
 		IfaceName:  req.GetInterfaceName(),
 		NamesSpace: req.GetNetworkNamespace(),
 	}
@@ -265,6 +266,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 				PortName:  s.Config.KernelIF,
 				Virtual:   false,
 				DPDK:      false,
+                                UnixSocket:false,
 				IfaceName: s.Config.KernelIF,
 			}
 
@@ -281,6 +283,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 			PortName:  "nimbess0",
 			Virtual:   true,
 			DPDK:      false,
+                        UnixSocket:false,
 			IfaceName: "nimbess0",
 		}
 		// Kernel VPort needs an IP, which will be the default gateway for all pods on this node

@@ -40,6 +40,7 @@ const (
 	VPORT     = "VPort"
 	PMDPORT   = "PMDPort"
 	PCAPPORT  = "PCAPPort"
+	UNIXPORT  = "UnixSocketPort"
 	PORTOUT   = "PortOut"
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
@@ -229,7 +230,7 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	// Egress gates from original Switch module will be used for L2Forward lookup match, and then
 	// also used for replicator flooding. Add Egress Gate for L2Forward -> replicator and Ingress
 	// gate for reverse
-	l2Fwd.EGates[999] = rep
+	l2Fwd.EGates[0] = rep
 	// Replicate should have no Ingress gates other than l2fwd
 	rep.IGates = make(map[network.Gate]network.PipelineModule)
 	rep.IGates[0] = l2Fwd
@@ -246,8 +247,8 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 
-	// Set default gate for l2forward to 999
-	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 999}
+	// Set default gate for l2forward to 0
+	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 0}
 	gateAny, err := ptypes.MarshalAny(gateArg)
 	if err != nil {
 		log.Errorf("Failure to serialize default gate arg: %v", gateArg)
@@ -588,13 +589,23 @@ func (d *Driver) createPort(port *network.Port) error {
 			return errors.New("DPDK physical ports are not currently supported")
 		}
 		// Must be a kernel iface, use PCAP type port
-		portDriver = PCAPPORT
-		portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
-		portAny, err = ptypes.MarshalAny(portArg)
-		if err != nil {
-			log.Errorf("Failure to serialize kernel port args: %v", portArg)
-			return errors.New("failed to serialize port args")
-		}
+                if port.UnixSocket {
+                    portDriver = UNIXPORT
+                    portArg := &bess_pb.UnixSocketPortArg{Path: port.SocketPath}
+                    portAny, err = ptypes.MarshalAny(portArg)
+                    if err != nil {
+                            log.Errorf("Failure to serialize Unix Socket port args: %v", portArg)
+                            return errors.New("failed to serialize port args")
+                    }
+                } else {
+                    portDriver = PCAPPORT
+                    portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
+                    portAny, err = ptypes.MarshalAny(portArg)
+                    if err != nil {
+                            log.Errorf("Failure to serialize pcap port args: %v", portArg)
+                            return errors.New("failed to serialize port args")
+                    }
+            }
 	}
 
 	portRequest := &bess_pb.CreatePortRequest{

@@ -63,6 +63,7 @@ type Port struct {
 	PortName   string
 	Virtual    bool
 	DPDK       bool
+        UnixSocket bool
 	IfaceName  string
 	Network    string
 	NamesSpace string
