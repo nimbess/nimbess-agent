@@ -218,7 +218,7 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	l2Fwd := &L2Forward{Switch: network.Switch{}}
 	l2Fwd.SetName(fmt.Sprintf("%s_l2forward", module.GetName()))
 	l2Fwd.IGates = module.IGates
-	l2Fwd.EGates = make(map[network.Gate]network.PipelineModule)
+	l2Fwd.EGates = network.MakeGateMap()
 	l2Fwd.L2FIB = module.L2FIB
 	if err := d.createL2ForwardModule(*l2Fwd); err != nil {
 		return err
@@ -232,7 +232,7 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	// gate for reverse
 	l2Fwd.EGates[0] = rep
 	// Replicate should have no Ingress gates other than l2fwd
-	rep.IGates = make(map[network.Gate]network.PipelineModule)
+	rep.IGates = network.MakeGateMap()
 	rep.IGates[0] = l2Fwd
 	if err := d.createReplicateModule(*rep); err != nil {
 		return err

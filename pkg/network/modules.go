@@ -169,3 +169,9 @@ func (m *Module) SetIGateMap(gMap map[Gate]PipelineModule) {
 func (m *Module) SetEGateMap(gMap map[Gate]PipelineModule) {
 	m.IGates = gMap
 }
+
+func MakeGateMap() map[Gate]PipelineModule {
+    rGates := make(map[Gate]PipelineModule)
+    rGates[0] = nil
+    return rGates
+}

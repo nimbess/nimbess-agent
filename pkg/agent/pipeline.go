@@ -56,7 +56,7 @@ func (s *NimbessPipeline) GetModule(name string) network.PipelineModule {
 func (s *NimbessPipeline) AddPort(name string, port *network.Port) (*network.EgressPort, error) {
 	log.Infof("Adding new port %v to pipeline: %v", port, s.Name)
 	portMod := network.Module{Name: fmt.Sprintf("%s_ingress", name),
-		EGates: make(map[network.Gate]network.PipelineModule)}
+		EGates: network.MakeGateMap()}
 	// Create Ingress Port
 	iPort := &network.IngressPort{Port: port, Module: portMod}
 	s.Modules[0] = iPort
@@ -71,7 +71,7 @@ func (s *NimbessPipeline) AddPort(name string, port *network.Port) (*network.Egr
 
 	// Create Egress port
 	ePortMod := network.Module{Name: fmt.Sprintf("%s_egress", name),
-		IGates: make(map[network.Gate]network.PipelineModule)}
+		IGates: network.MakeGateMap()}
 	ePort := &network.EgressPort{Port: port, Module: ePortMod}
 	return ePort, nil
 }
@@ -80,8 +80,8 @@ func getForwarderModule(forwarder string, metaKey string) (network.PipelineModul
 	switch forwarder {
 	case L2DriverMode:
 		mod := network.Module{Name: fmt.Sprintf("Switch_%s", metaKey),
-			IGates: make(map[network.Gate]network.PipelineModule),
-			EGates: make(map[network.Gate]network.PipelineModule),
+			IGates: network.MakeGateMap(),
+			EGates: network.MakeGateMap(),
 		}
 		sMod := &network.Switch{Module: mod, L2FIB: make(map[string]network.Gate)}
 		return sMod, nil
@@ -148,8 +148,8 @@ func (s *NimbessPipeline) createPipeline(module network.PipelineModule, port str
 		// We can assert Module safely here because every complex module should always inherit Module
 		newMod.(network.PipelineModule).SetName(newName)
 		// Create new maps for gates, as new mappings will be built recursively
-		newMod.(network.PipelineModule).SetEGateMap(make(map[network.Gate]network.PipelineModule))
-		newMod.(network.PipelineModule).SetIGateMap(make(map[network.Gate]network.PipelineModule))
+		newMod.(network.PipelineModule).SetEGateMap(network.MakeGateMap())
+		newMod.(network.PipelineModule).SetIGateMap(network.MakeGateMap())
 		// Append new module to existing module list
 		s.Modules = append(s.Modules, newMod.(network.PipelineModule))
 		log.Debugf("Module created: %+v", newMod)
