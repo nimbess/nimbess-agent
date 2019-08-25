@@ -588,7 +588,6 @@ func (d *Driver) createPort(port *network.Port) error {
 		if port.DPDK {
 			return errors.New("DPDK physical ports are not currently supported")
 		}
-		// Must be a kernel iface, use PCAP type port
                 if port.UnixSocket {
                     portDriver = UNIXPORT
                     portArg := &bess_pb.UnixSocketPortArg{Path: port.SocketPath}
@@ -598,6 +597,7 @@ func (d *Driver) createPort(port *network.Port) error {
                             return errors.New("failed to serialize port args")
                     }
                 } else {
+                    // Must be a kernel iface, use PCAP type port
                     portDriver = PCAPPORT
                     portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
                     portAny, err = ptypes.MarshalAny(portArg)
