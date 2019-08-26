@@ -331,6 +331,9 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire ingress gates first: other_module<M1> (eGate) --> (iGate) this_module<M2>
 	iGates := module.GetIGateMap()
 	for iGate, mod1 := range iGates {
+                if mod1 == nil {
+                    continue
+                }
 		log.Debugf("Wiring Ingress gate %d, peering module: %s", iGate, mod1.GetName())
 		matchingConn := false
 		// We now need to get eGate for connecting module
@@ -401,6 +404,9 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire egress gates: this_module<M1> (eGate) --> (iGate) other_module<M2>
 	eGates := module.GetEGateMap()
 	for eGate, mod2 := range eGates {
+                if mod2 == nil {
+                    continue
+                }
 		log.Debugf("Wiring Egress gate %d, peering module: %s", eGate, mod2.GetName())
 		matchingConn := false
 		// We now need to get iGate for connecting module
