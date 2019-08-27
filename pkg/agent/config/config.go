@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package agent
+package config
 
 import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+	"time"
 )
 
 const (
@@ -43,12 +44,16 @@ type Network struct {
 
 // NimbessConfig contains the generic Nimbess Agent configuration.
 type NimbessConfig struct {
-	Port          int     `mapstructure:"agent_port"`
-	DataPlane     string  `mapstructure:"data_plane"`
-	DataPlanePort int     `mapstructure:"data_plane_port"`
-	WorkerCores   []int64 `mapstructure:"worker_cores"`
-	KernelIF      string  `mapstructure:"kernel_interface"`
-	FastPathIF    string  `mapstructure:"high_speed_interface"`
+	Kubeconfig      string        `mapstructure:"kubeconfig"`
+	ResyncPeriod    int64         `mapstructure:"resync_period"`
+	EtcdEndpoints   string        `mapstructure:"etcd_endpoints"`
+	EtcdDialTimeout time.Duration `mapstructure:"etcd_timeout"`
+	Port            int           `mapstructure:"agent_port"`
+	DataPlane       string        `mapstructure:"data_plane"`
+	DataPlanePort   int           `mapstructure:"data_plane_port"`
+	WorkerCores     []int64       `mapstructure:"worker_cores"`
+	KernelIF        string        `mapstructure:"kernel_interface"`
+	FastPathIF      string        `mapstructure:"high_speed_interface"`
 	Network
 }
 
@@ -56,10 +61,14 @@ type NimbessConfig struct {
 // It returns a parsed Nimbess Configuration from a config file location.
 func InitConfig(cfgPath string) *NimbessConfig {
 	cfg := &NimbessConfig{
-		Port:          NimbessAgentPort,
-		DataPlane:     BESS,
-		DataPlanePort: BessDefaultPort,
-		WorkerCores:   []int64{0},
+		Kubeconfig:      "",
+		ResyncPeriod:    0,
+		EtcdEndpoints:   "http://127.0.0.1:52379",
+		EtcdDialTimeout: 1 * time.Second,
+		Port:            NimbessAgentPort,
+		DataPlane:       BESS,
+		DataPlanePort:   BessDefaultPort,
+		WorkerCores:     []int64{0},
 		Network: Network{
 			Driver:     L2DriverMode,
 			MacLearn:   false,
@@ -69,6 +78,8 @@ func InitConfig(cfgPath string) *NimbessConfig {
 	}
 	viper.SetConfigFile(cfgPath)
 	viper.SetConfigType("yaml")
+	viper.AutomaticEnv()
+	_ = viper.BindEnv("EtcdEndpoints", "ETCDCTL_ENDPOINTS")
 	err := viper.ReadInConfig()
 	if err != nil {
 		log.Warningf("Unable to read Nimbess config file: %v, will use defaults", err)

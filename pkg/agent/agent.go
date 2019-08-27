@@ -22,8 +22,11 @@ import (
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/google/uuid"
+	"github.com/denisbrodbeck/machineid"
 	"github.com/intel/userspace-cni-network-plugin/usrsptypes"
+	"github.com/nimbess/nimbess-agent/pkg/agent/config"
+	"github.com/nimbess/nimbess-agent/pkg/etcdv3"
+	"github.com/nimbess/nimbess-agent/pkg/etcdv3/model"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -37,6 +40,7 @@ import (
 	"path"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/nimbess/nimbess-agent/pkg/drivers"
 	"github.com/nimbess/nimbess-agent/pkg/proto/cni"
@@ -71,15 +75,17 @@ var vhostIndex = 0
 // It includes a mutex used to handle locking between driver and agent events to force a
 // single-processed event pipeline.
 type NimbessAgent struct {
-	ID         uuid.UUID
-	Mu         *sync.Mutex
-	Config     *NimbessConfig
-	Driver     drivers.Driver
-	KubeClient kubernetes.Interface
+	ID          string
+	EtcdContext context.Context
+	Mu          *sync.Mutex
+	Config      *config.NimbessConfig
+	Driver      drivers.Driver
+	KubeClient  kubernetes.Interface
 	// Pipelines contains a map of port name to pipeline pointer
 	Pipelines map[string]*NimbessPipeline
 	// MetaPipelines contains a map of network name to abstract pipelines
 	MetaPipelines map[string]*NimbessPipeline
+	EtcdClient    etcdv3.Client
 }
 
 // getPortName translates a CNI request into a Nimbess Port Identifier
@@ -107,7 +113,7 @@ func (s *NimbessAgent) createPortPipeline(port *network.Port, metaKey string) (*
 	s.Pipelines[portName] = &NimbessPipeline{Mu: s.Mu, Driver: s.Driver, MetaKey: metaKey,
 		Name: fmt.Sprintf("%s_pipeline", portName), Modules: make([]network.PipelineModule, 0),
 		EgressPorts: make([]*network.EgressPort, 0)}
-	if err := s.Pipelines[portName].Init(portName, L2DriverMode, s.MetaPipelines[metaKey]); err != nil {
+	if err := s.Pipelines[portName].Init(portName, config.L2DriverMode, s.MetaPipelines[metaKey]); err != nil {
 		log.Error("Error while initializing Port Pipeline: %v", err)
 		return &cni.CNIReply{Result: CniIncompatible}, err
 	}
@@ -232,7 +238,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	// Initialize pipeline
 	// Check if meta pipeline exists for this network
 	var metaKey string
-	if s.Config.Network.Driver == L2DriverMode {
+	if s.Config.Network.Driver == config.L2DriverMode {
 		metaKey = req.NetworkConfig.GetName()
 	} else {
 		log.Error("Only L2 Network Driver mode is currently supported")
@@ -250,7 +256,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		s.MetaPipelines[metaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", metaKey),
 			MetaKey: metaKey, Modules: make([]network.PipelineModule, 0),
 			EgressPorts: make([]*network.EgressPort, 0)}
-		if err := s.MetaPipelines[metaKey].Init("", L2DriverMode, nil); err != nil {
+		if err := s.MetaPipelines[metaKey].Init("", config.L2DriverMode, nil); err != nil {
 			log.Error("Error while initializing MetaPipeline: %v", err)
 			return &cni.CNIReply{Result: CniIncompatible}, err
 		}
@@ -309,7 +315,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		s.MetaPipelines[fastMetaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", fastMetaKey),
 			MetaKey: fastMetaKey, Modules: make([]network.PipelineModule, 0),
 			EgressPorts: make([]*network.EgressPort, 0)}
-		if err := s.MetaPipelines[fastMetaKey].Init("", L2DriverMode, nil); err != nil {
+		if err := s.MetaPipelines[fastMetaKey].Init("", config.L2DriverMode, nil); err != nil {
 			log.Error("Error while initializing MetaPipeline: %v", err)
 			return &cni.CNIReply{Result: CniIncompatible}, err
 		}
@@ -393,7 +399,7 @@ func (s *NimbessAgent) updateL2FIB(l2Forwarder *network.Switch, macAddr string, 
 func (s *NimbessAgent) updateFIB(pipeline *NimbessPipeline, port network.EgressPort) error {
 	log.Debugf("Updating L2FIB for pipeline %s, with port %s", pipeline.Name, port.GetName())
 	// Check if L2 or L3
-	if s.Config.Driver == L2DriverMode {
+	if s.Config.Driver == config.L2DriverMode {
 		if s.Config.MacLearn {
 			log.Info("Ignoring static FIB update because MAC learning is enabled")
 			return nil
@@ -604,6 +610,44 @@ func annotatePod(k8sClient kubernetes.Interface, req *cni.CNIRequest, configData
 		}
 	}
 	log.Debugf("Pod annotation complete: %s", pod.Name)
+	return nil
+}
+
+// Init initializes the agent
+func (s *NimbessAgent) Init() error {
+	firstStart := true
+	// Find agent ID
+	id, err := machineid.ID()
+	if err != nil {
+		return err
+	} else if id == "" {
+		return errors.New("unable to find machine ID")
+	}
+
+	log.Infof("Agent ID: %s", id)
+	s.ID = id
+	k := model.AgentKey{
+		MachineID: id,
+	}
+	kv := &model.KVPair{Key: k, Value: model.Agent{LastStart: time.Now().String()}}
+	// check for ID in etcd, if exists we know this is not first time startup
+	err = s.EtcdClient.Create(s.EtcdContext, kv)
+	if err != nil {
+		if cerr, ok := err.(*etcdv3.StorageError); ok {
+			if cerr.Code == etcdv3.ErrCodeKeyExists {
+				firstStart = false
+				log.Info("Previous agent data detected in database")
+			} else {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	// TODO(trozet) handle resync if not first start of data plane
+	// we want to do this before Agent Runs to and accepts CNI requests
+	log.Infof("Agent has finished initialization, first time startup: %t", firstStart)
 	return nil
 }
 
