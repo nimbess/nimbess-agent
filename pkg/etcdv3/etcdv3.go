@@ -29,6 +29,8 @@ import (
 type Client interface {
 	Create(ctx context.Context, object *model.KVPair) error
 	Delete(ctx context.Context, k model.Key) error
+	Watch(ctx context.Context, prefix string) clientv3.WatchChan
+	Close()
 }
 
 type EtcdV3Client struct {
@@ -49,6 +51,10 @@ func New(config *config.NimbessConfig) (Client, error) {
 	}
 
 	return &EtcdV3Client{etcdClient}, nil
+}
+
+func (c *EtcdV3Client) Close() {
+	c.etcdClient.Close()
 }
 
 func (c *EtcdV3Client) Create(ctx context.Context, d *model.KVPair) error {
@@ -96,6 +102,12 @@ func (c *EtcdV3Client) Delete(ctx context.Context, k model.Key) error {
 		return NewKeyExistsError(key, 0)
 	}
 	return nil
+}
+
+// Watch starts a watcher on a prefix and returns the channel
+func (c *EtcdV3Client) Watch(ctx context.Context, prefix string) clientv3.WatchChan {
+	log.Debugf("Setting up watcher on path prefix: %s", prefix)
+	return c.etcdClient.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithPrevKV())
 }
 
 func notFound(key string) clientv3.Cmp {

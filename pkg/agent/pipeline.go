@@ -18,13 +18,13 @@ package agent
 
 import (
 	"fmt"
-	"github.com/mohae/deepcopy"
-	"github.com/nimbess/nimbess-agent/pkg/agent/config"
 	"reflect"
 	"sync"
 
+	"github.com/nimbess/nimbess-agent/pkg/agent/config"
 	"github.com/nimbess/nimbess-agent/pkg/drivers"
 	"github.com/nimbess/nimbess-agent/pkg/network"
+	"github.com/nimbess/nimbess-agent/pkg/util"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -143,16 +143,9 @@ func (s *NimbessPipeline) createPipeline(module network.PipelineModule, port str
 	// If module doesn't exist we need to create a copy
 	if newMod == nil {
 		log.Debugf("Creating copy of meta module for Linked list")
-		newMod := deepcopy.Copy(module)
-		// Unique module names for pipeline use format <Module name>_<port name>
-		newName := fmt.Sprintf("%s_%s", newMod.(network.PipelineModule).GetName(), port)
-		// We can assert Module safely here because every complex module should always inherit Module
-		newMod.(network.PipelineModule).SetName(newName)
-		// Create new maps for gates, as new mappings will be built recursively
-		newMod.(network.PipelineModule).SetEGateMap(make(map[network.Gate]network.PipelineModule))
-		newMod.(network.PipelineModule).SetIGateMap(make(map[network.Gate]network.PipelineModule))
 		// Append new module to existing module list
-		s.Modules = append(s.Modules, newMod.(network.PipelineModule))
+		newMod = createModFromMeta(module, port)
+		s.Modules = append(s.Modules, newMod)
 		log.Debugf("Module created: %+v", newMod)
 	}
 
@@ -220,4 +213,206 @@ func (s *NimbessPipeline) GetModuleFromType(modType reflect.Type) network.Pipeli
 	}
 	log.Debugf("No Module of type: %v, found in Pipeline: %s, modules: %v", modType, s.Name, s.Modules)
 	return nil
+}
+
+// Inserts a Module at position idx in a pipeline. If idx is 0, the module is inserted after the source port
+// If index is less than 0, it is inserted at the end of pipeline before all egress ports
+// agent is a pointer to the NimbessAgent to use to render the changes when a port pipeline is updated
+func (s *NimbessPipeline) InsertModule(mod network.PipelineModule, index int, agent *NimbessAgent) error {
+	log.Debugf("Inserting module into pipeline %s at idx %d, %+v", s.Name, index, mod)
+	// startIdx is used to determined the index of the first non-port module (aka the start of the meta pipeline)
+	startIdx := 0
+	isPortPipeline := false
+	// Find first non source port element to find real beginning index
+	for idx, module := range s.Modules {
+		if reflect.TypeOf(module) != reflect.TypeOf(&network.IngressPort{}) {
+			startIdx = idx
+			break
+		}
+	}
+
+	// Find last non egress port element to find real end index
+	endIdx := len(s.Modules) - 1
+	for i := endIdx; i >= 0; i-- {
+		if reflect.TypeOf(s.Modules[i]) != reflect.TypeOf(network.EgressPort{}) {
+			endIdx = i
+			break
+		}
+	}
+
+	if startIdx != 0 {
+		log.Debugf("Inserting into Port Pipeline. Beginning idx: %d, End idx: %d", startIdx, endIdx)
+		isPortPipeline = true
+	}
+
+	// This is a requested insert at beginning of a meta or port pipeline
+	if index == 0 {
+		// Update Modules slice
+		s.Modules = append(s.Modules, mod)
+		copy(s.Modules[startIdx+1:], s.Modules[startIdx:])
+		s.Modules[startIdx] = mod
+
+		// If startIdx does not equal 0, then there must be a previous port we are connecting to
+		// wire it
+		// Need to find previously used gates and rewire them
+		var nextGate *network.Gate
+		nextMod := s.Modules[startIdx+1]
+		if isPortPipeline {
+			prevPort := s.Modules[startIdx-1]
+			prevGate := prevPort.GetEGate(nextMod)
+			nextGate = nextMod.GetIGate(prevPort)
+			prevPort.Connect(mod, true, prevGate)
+			mod.Connect(prevPort, false, nil)
+		}
+		// Rewire next Module
+		mod.Connect(nextMod, true, nil)
+		nextMod.Connect(mod, false, nextGate)
+
+		// Request to insert at end of meta or port pipeline
+	} else if index >= endIdx || index < 0 {
+		// Check for inserting at end
+		log.Debug("Inserting Module at end of pipeline")
+		prevMod := s.Modules[endIdx]
+		if len(s.Modules)-1 != endIdx {
+			var prevGate *network.Gate
+			// We know this is a port pipeline and there are egress ports
+			// Need to wire all egress ports and preserve previous gate usage
+			for _, eMod := range s.EgressPorts {
+				nextGate := eMod.GetIGate(prevMod)
+				prevGate = prevMod.GetEGate(eMod)
+				// prevMod will no longer connect to many egress ports, and only connect to the new module
+				// reset all their wiring to nil
+				prevMod.GetEGateMap()[*prevGate] = nil
+				mod.Connect(eMod, true, nil)
+				eMod.Connect(mod, false, nextGate)
+			}
+
+			// wire previous module
+			mod.Connect(prevMod, false, nil)
+			// re-use last gate found that was previously wired to egress port
+			prevMod.Connect(mod, true, prevGate)
+
+			// Update Modules slice
+			s.Modules = append(s.Modules, mod)
+			copy(s.Modules[startIdx+1:], s.Modules[startIdx:])
+			s.Modules[index] = mod
+		} else {
+			// meta pipeline, no egress ports. Just append and wire to previous module
+			s.Modules = append(s.Modules, mod)
+			prevMod.Connect(mod, true, nil)
+			mod.Connect(prevMod, false, nil)
+		}
+		// Must be inserting in the middle
+	} else {
+		log.Debug("Inserting Module at middle of pipeline")
+		// Update Modules slice
+		s.Modules = append(s.Modules, mod)
+		copy(s.Modules[index+1:], s.Modules[index:])
+		s.Modules[index] = mod
+
+		prevMod := s.Modules[index-1]
+		nextMod := s.Modules[index+1]
+		prevGate := prevMod.GetEGate(nextMod)
+		nextGate := nextMod.GetIGate(prevMod)
+		prevMod.Connect(mod, true, prevGate)
+		mod.Connect(prevMod, false, nil)
+		mod.Connect(nextMod, true, nil)
+		nextMod.Connect(mod, false, nextGate)
+	}
+
+	if isPortPipeline {
+		log.Debug("Port Pipeline: Re-rendering pipeline")
+		if err := agent.Driver.ReRenderModules(s.Modules); err != nil {
+			return err
+		}
+		log.Debug("Updating FIB for all currently configured egress ports")
+		if err := agent.updateFIBFromEgress(s); err != nil {
+			return err
+		}
+		agent.Driver.Commit()
+	}
+
+	return nil
+}
+
+// RemoveModule removes a module from a pipeline
+// agent is a pointer to the agent to use to render the changes when a port pipeline is updated
+func (s *NimbessPipeline) RemoveModule(modName string, agent *NimbessAgent) error {
+	var mod, prevMod, nextMod network.PipelineModule
+	var modIdx int
+	for idx, module := range s.Modules {
+		if module.GetName() == modName {
+			mod = module
+			modIdx = idx
+			log.Debugf("Module found for Removal: %s", mod.GetName())
+			if idx > 0 {
+				prevMod = s.Modules[idx-1]
+				log.Debugf("Previous Module found: %s", prevMod.GetName())
+			}
+			if idx < len(s.Modules)-1 {
+				nextMod = s.Modules[idx+1]
+				log.Debugf("Next Module found: %s", nextMod.GetName())
+			}
+			break
+		}
+	}
+
+	if mod == nil {
+		return fmt.Errorf("unable to find module to remove: %s", modName)
+	}
+
+	if prevMod != nil && nextMod != nil {
+		// if both prevMod and nextMod exist, find gates used to connect to mod and rewire them together
+		prevGate := prevMod.GetEGate(mod)
+		nextGate := nextMod.GetIGate(mod)
+		prevMod.Connect(nextMod, true, prevGate)
+		nextMod.Connect(prevMod, false, nextGate)
+	} else if prevMod != nil {
+		// if no next mod, then set the gate to nil
+		prevGate := prevMod.GetEGate(mod)
+		prevMod.GetEGateMap()[*prevGate] = nil
+	} else {
+		// if no prev mod, then set the gate to nil
+		nextGate := nextMod.GetIGate(mod)
+		nextMod.GetIGateMap()[*nextGate] = nil
+	}
+
+	// remove module from modules slice
+	s.Modules = append(s.Modules[:modIdx], s.Modules[modIdx+1:]...)
+	if agent != nil {
+		if err := agent.Driver.ReRenderModules(s.Modules); err != nil {
+			return err
+		}
+		log.Debug("Updating FIB for all currently configured egress ports")
+		if err := agent.updateFIBFromEgress(s); err != nil {
+			return err
+		}
+		agent.Driver.Commit()
+	}
+	return nil
+}
+
+func createModFromMeta(module network.PipelineModule, name string) network.PipelineModule {
+	log.Debugf("Instantiating new module from meta module: %+v", module)
+	// We can assert Module safely here because every complex module should always inherit Module
+	newMod := util.Copy(module).(network.PipelineModule)
+	// Unique module names for pipeline use format <Module name>_<port name>
+	newName := fmt.Sprintf("%s_%s", newMod.GetName(), name)
+	newMod.SetName(newName)
+	// Set the meta pipeline name for this module
+	newMod.SetMeta(module.GetName())
+	// Create new maps for gates, as new mappings will be built recursively
+	newMod.SetEGateMap(make(map[network.Gate]network.PipelineModule))
+	newMod.SetIGateMap(make(map[network.Gate]network.PipelineModule))
+	return newMod
+}
+
+func (s *NimbessPipeline) GetEgressPorts() []*network.EgressPort {
+	var egressList []*network.EgressPort
+	for _, mod := range s.Modules {
+		if reflect.TypeOf(mod) == reflect.TypeOf(&network.EgressPort{}) {
+			egressList = append(egressList, mod.(*network.EgressPort))
+		}
+	}
+	return egressList
 }
