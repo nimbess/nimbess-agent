@@ -19,6 +19,7 @@ package agent
 import (
 	"fmt"
 	"github.com/mohae/deepcopy"
+	"github.com/nimbess/nimbess-agent/pkg/agent/config"
 	"reflect"
 	"sync"
 
@@ -78,7 +79,7 @@ func (s *NimbessPipeline) AddPort(name string, port *network.Port) (*network.Egr
 
 func getForwarderModule(forwarder string, metaKey string) (network.PipelineModule, error) {
 	switch forwarder {
-	case L2DriverMode:
+	case config.L2DriverMode:
 		mod := network.Module{Name: fmt.Sprintf("Switch_%s", metaKey),
 			IGates: make(map[network.Gate]network.PipelineModule),
 			EGates: make(map[network.Gate]network.PipelineModule),

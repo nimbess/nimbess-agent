@@ -81,6 +81,15 @@ spec:
               name: agent-conf-dir
             - mountPath: /host/proc
               name: proc-dir
+            - mountPath: /etc/machine-id
+              name: machine-dir
+              subPath: machine-id
+          env:
+            - name: ETCDCTL_ENDPOINTS
+              valueFrom:
+                configMapKeyRef:
+                  name: nimbess-etcd-config
+                  key: etcdctl_endpoints
         # This container installs the Nimbess CNI binary
         # and CNI network config file on each node.
         - name: install-cni
@@ -118,4 +127,7 @@ spec:
         - name: shared-dir
           hostPath:
             path: /var/lib/nimbess/cni/
+        - name: machine-dir
+          hostPath:
+            path: /etc/
 
