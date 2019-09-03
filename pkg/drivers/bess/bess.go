@@ -45,6 +45,7 @@ const (
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
 	REPLICATE = "Replicate"
+    DROPGATE  = 8192    // This needs to be adjusted if MAX_GATES in bess changes
 )
 
 // SupportedObjects contains the BESS objects supported by this driver
@@ -166,6 +167,8 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 	for _, module := range modules {
 		// Figure out type of Module and proper create handler
 		switch reflect.TypeOf(module) {
+        case nil:
+                continue
 		case reflect.TypeOf(&network.IngressPort{}):
 			if exists, _ := objectExists(d.bessClient, module.GetName(), MODULE); exists == true {
 				log.Debugf("Skipping render for %s, already exists", module.GetName())
@@ -200,6 +203,9 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 	for _, module := range modules {
 		// Do not wire forwarders because those are core of pipeline and should already be wired
 		if reflect.TypeOf(module) == reflect.TypeOf(&network.Switch{}) {
+			continue
+		}
+		if reflect.TypeOf(module) == nil {
 			continue
 		}
 		if err := d.wireModule(module); err != nil {
@@ -265,7 +271,6 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	}
 	log.Infof("BESS Switch created with L2FWD: %s, Replicate: %s", l2Fwd.Name, rep.Name)
 	return nil
-
 }
 
 // createReplicateModule creates an instance of a Replicate in BESS
@@ -331,9 +336,10 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire ingress gates first: other_module<M1> (eGate) --> (iGate) this_module<M2>
 	iGates := module.GetIGateMap()
 	for iGate, mod1 := range iGates {
-                if mod1 == nil {
-                    continue
-                }
+        if mod1 == nil {
+            // There is little point in explicit wiring a null igate to let's say DROP
+            continue
+        }
 		log.Debugf("Wiring Ingress gate %d, peering module: %s", iGate, mod1.GetName())
 		matchingConn := false
 		// We now need to get eGate for connecting module
@@ -404,9 +410,9 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire egress gates: this_module<M1> (eGate) --> (iGate) other_module<M2>
 	eGates := module.GetEGateMap()
 	for eGate, mod2 := range eGates {
-                if mod2 == nil {
-                    continue
-                }
+        if mod2 == nil {
+            continue
+        }
 		log.Debugf("Wiring Egress gate %d, peering module: %s", eGate, mod2.GetName())
 		matchingConn := false
 		// We now need to get iGate for connecting module

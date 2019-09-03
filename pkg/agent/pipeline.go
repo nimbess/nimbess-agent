@@ -158,14 +158,14 @@ func (s *NimbessPipeline) createPipeline(module network.PipelineModule, port str
 	// Walk meta module Ingress gates and connect new port pipeline modules
 	for gate, mod := range module.GetIGateMap() {
 		if mod != nil {
-                    newMod.Connect(s.createPipeline(mod, port), false, &gate)
+            newMod.Connect(s.createPipeline(mod, port), false, &gate)
 		}
 	}
 
 	// Walk meta module Egress gates and connect new port pipeline modules
 	for gate, mod := range module.GetEGateMap() {
 		if mod != nil {
-                    newMod.Connect(s.createPipeline(mod, port), true, &gate)
+            newMod.Connect(s.createPipeline(mod, port), true, &gate)
 		}
 	}
 	return newMod
