@@ -24,6 +24,15 @@ import (
 // Gate is a virtual port for a module for traffic to ingress or egress
 type Gate uint64
 
+type L2FIBCommand struct {
+    Command string
+    MAC string
+    Permanent bool
+    Setage int64
+    Port string
+}
+
+
 // PipelineModule type to implement module updates
 type PipelineModule interface {
 	Connect(module PipelineModule, egress bool, gate *Gate) Gate

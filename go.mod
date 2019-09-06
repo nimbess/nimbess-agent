@@ -8,6 +8,7 @@ require (
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/golang/protobuf v1.3.1
+	github.com/google/gopacket v1.1.17
 	github.com/google/uuid v1.0.0
 	github.com/intel/userspace-cni-network-plugin v0.0.0-20190814155513-85f138b2738d
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826

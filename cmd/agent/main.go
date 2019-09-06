@@ -56,7 +56,8 @@ func selectDriver(config *agent.NimbessConfig) drivers.Driver {
 	switch config.DataPlane {
 	case agent.BESS:
 		// TODO (FIXME) Just use background context for now
-		driver := &bess.Driver{DriverConfig: driverConfig, Context: context.Background()}
+		driver := bess.NewDriver(driverConfig, context.Background())
+		//driver := &bess.Driver{DriverConfig: driverConfig, Context: context.Background()}
 		log.Infof("Driver loaded %+v", driver)
 		return driver
 	default:

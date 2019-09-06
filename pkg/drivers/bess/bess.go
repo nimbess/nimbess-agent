@@ -56,6 +56,15 @@ type Driver struct {
 	drivers.DriverConfig
 	bessClient bess_pb.BESSControlClient
 	Context    context.Context
+    notifications chan network.L2FIBCommand
+}
+
+func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Driver){
+    return &Driver{
+        DriverConfig: configArg,
+        Context: contextArg,
+        notifications: make(chan network.L2FIBCommand),
+    }
 }
 
 // Connect is used to setup gRPC connection with the data plane.
@@ -79,6 +88,10 @@ func (d *Driver) Connect() *grpc.ClientConn {
 		log.Warning("Failed to start workers!")
 	}
 	return conn
+}
+
+func (d *Driver) GetNotifications() (chan network.L2FIBCommand) {
+    return d.notifications
 }
 
 func initWorkers(client bess_pb.BESSControlClient, workerCores []int64) {
@@ -711,6 +724,30 @@ func (d *Driver) AddEntryL2FIB(module *network.Switch, macAddr string, gate netw
 		return errors.New(res.GetError().GetErrmsg())
 	}
 	log.Infof("BESS L2 FIB entry created: %+v", entry)
+	return nil
+}
+
+// AddEntryL2FIB adds an L2 entry (Destination MAC address and output gate) to a Switch
+func (d *Driver) DelEntryL2FIB(module *network.Switch, macAddr string) error {
+	log.Infof("Deleting L2 BESS entry for mac: %s", macAddr)
+	entry := []string{macAddr}
+	delArg := &bess_pb.L2ForwardCommandDeleteArg{Addrs: entry}
+	FIBAny, err := ptypes.MarshalAny(delArg)
+	if err != nil {
+		log.Errorf("Failure to serialize L2 delete args: %v", delArg)
+		return err
+	}
+	l2FwdName := fmt.Sprintf("%s_l2forward", module.GetName())
+	cmd := &bess_pb.CommandRequest{Name: l2FwdName, Cmd: "delete", Arg: FIBAny}
+	res, err := d.bessClient.ModuleCommand(context.Background(), cmd)
+	if err != nil {
+		log.Errorf("Failed to delete L2FIB entry: %v, error: %v", entry, err)
+		return err
+	} else if res.GetError().GetCode() != 0 {
+		log.Errorf("Failed to delete tcam entry, error: %s", res.GetError().GetErrmsg())
+		return errors.New(res.GetError().GetErrmsg())
+	}
+	log.Infof("BESS L2 FIB entry deleted: %+v", entry)
 	return nil
 }
 

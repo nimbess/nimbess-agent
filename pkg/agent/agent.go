@@ -70,6 +70,13 @@ var vhostIndex = 0
 // It contains a loadable runtime data plane driver to manage the data plane.
 // It includes a mutex used to handle locking between driver and agent events to force a
 // single-processed event pipeline.
+
+type L2FIBEntry struct {
+    permanent bool
+    age int64
+    port string
+}
+
 type NimbessAgent struct {
 	ID         uuid.UUID
 	Mu         *sync.Mutex
@@ -80,6 +87,8 @@ type NimbessAgent struct {
 	Pipelines map[string]*NimbessPipeline
 	// MetaPipelines contains a map of network name to abstract pipelines
 	MetaPipelines map[string]*NimbessPipeline
+    l2fib map[string]L2FIBEntry
+    notifications chan network.L2FIBCommand
 }
 
 // getPortName translates a CNI request into a Nimbess Port Identifier
@@ -392,6 +401,38 @@ func (s *NimbessAgent) updateL2FIB(l2Forwarder *network.Switch, macAddr string, 
 	return nil
 }
 
+func (s *NimbessAgent) addMACtoL2FIB(MAC string, pipeline *NimbessPipeline, portname string) error {
+    log.Debugf("Adding MAC for pipeline %s, with port %s", pipeline.Name, portname)
+
+	l2switch := pipeline.GetModuleFromType(reflect.TypeOf(&network.Switch{}))
+    if l2switch == nil {
+        log.Errorf("Unable to find Forwarding Module in pipeline: %s", pipeline.Name)
+        return errors.New("unable to find Forwarding Module in Pipeline")
+    }
+    for gate, mod := range l2switch.GetEGateMap() {
+        if mod == nil {
+            continue
+        }
+        log.Debugf("L2FIB Gate search. Gate: %d, mod: %s, port: %s", gate, mod.GetName(), portname)
+        if mod.GetName() == portname {
+            log.Debugf("Gate %d found for port %v", gate, portname)
+            return s.updateL2FIB(l2switch.(*network.Switch), MAC, gate)
+        }
+    }
+	return errors.New("unable to find gate for EgressPort on Switch")
+}
+
+func (s *NimbessAgent) delMACfromFIB(MAC string, pipeline *NimbessPipeline) error {
+    log.Debugf("Deleting MAC for pipeline %s", pipeline.Name)
+
+	l2switch := pipeline.GetModuleFromType(reflect.TypeOf(&network.Switch{}))
+    if l2switch == nil {
+        log.Errorf("Unable to find Forwarding Module in pipeline: %s", pipeline.Name)
+        return errors.New("unable to find Forwarding Module in Pipeline")
+    }
+    return s.Driver.DelEntryL2FIB(l2switch.(*network.Switch), MAC)
+}
+
 // updateFIB adds a new FIB entry to a Pipeline's forwarder for a new EgressPort
 func (s *NimbessAgent) updateFIB(pipeline *NimbessPipeline, port network.EgressPort) error {
 	log.Debugf("Updating L2FIB for pipeline %s, with port %s", pipeline.Name, port.GetName())
@@ -412,6 +453,9 @@ func (s *NimbessAgent) updateFIB(pipeline *NimbessPipeline, port network.EgressP
 		// TODO this means that the forwarder must be directly connected to EgressPort,
 		// need to look at the logic for if this isn't the case
 		for gate, mod := range module.GetEGateMap() {
+            if mod == nil {
+                continue
+            }
 			log.Debugf("L2FIB Gate search. Gate: %d, mod: %s, port: %s", gate, mod.GetName(), port.Name)
 			if mod.GetName() == port.GetName() {
 				log.Debugf("Gate %d found for port %v", gate, port)
@@ -610,11 +654,64 @@ func annotatePod(k8sClient kubernetes.Interface, req *cni.CNIRequest, configData
 	return nil
 }
 
+func (s *NimbessAgent) processNotification() (bool) {
+
+    s.Mu.Lock()
+    defer s.Mu.Unlock()
+
+    fibRequest := <-s.notifications
+
+    if fibRequest.Command == "LEARN" {
+        // Learned
+        s.l2fib[fibRequest.MAC] = L2FIBEntry {
+            permanent: false,
+            age:fibRequest.Setage,
+            port:fibRequest.Port,
+        }
+        for key, pipeline := range s.Pipelines {
+            if key != fibRequest.Port {
+                // no Routing for self
+                s.addMACtoL2FIB(fibRequest.MAC, pipeline, fibRequest.Port)
+            }
+        }
+    }
+    if  fibRequest.Command == "EXPIRE" {
+        entry, ok := s.l2fib[fibRequest.MAC]
+        if ok && (!entry.permanent) {
+            delete(s.l2fib, fibRequest.MAC)
+            for _, pipeline := range s.Pipelines {
+                s.delMACfromFIB(fibRequest.MAC, pipeline)
+            }
+        }
+    }
+    if fibRequest.Command == "ADD" {
+        s.l2fib[fibRequest.MAC] = L2FIBEntry {
+            permanent: true,
+            age:0,
+            port:fibRequest.Port,
+        }
+        for key, pipeline := range s.Pipelines {
+            if key != fibRequest.Port {
+                s.addMACtoL2FIB(fibRequest.MAC, pipeline, fibRequest.Port)
+            }
+        }
+    }
+    return true //Deal with control later
+}
+
+func (s *NimbessAgent) runNotifications() {
+    for s.processNotification() {
+    }
+}
+
+
 // Run starts up the main Agent daemon.
 func (s *NimbessAgent) Run() error {
 	log.Info("Starting Nimbess Agent...")
 	log.Info("Connecting to Data Plane")
 	dpConn := s.Driver.Connect()
+    s.notifications = s.Driver.GetNotifications()
+    go s.runNotifications()
 	defer dpConn.Close()
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.Config.Port))
 	if err != nil {
