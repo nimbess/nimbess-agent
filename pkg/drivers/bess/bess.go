@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+    "os"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/nimbess/nimbess-agent/pkg/network"
@@ -46,6 +47,8 @@ const (
 	L2FORWARD = "L2Forward"
 	REPLICATE = "Replicate"
     DROPGATE  = 8192    // This needs to be adjusted if MAX_GATES in bess changes
+    BASE_SOCKET_PATH = "/var/run/nimbess"
+    SOCKET_PATH = "/var/run/nimbess/%s"
 )
 
 // SupportedObjects contains the BESS objects supported by this driver
@@ -60,6 +63,7 @@ type Driver struct {
 }
 
 func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Driver){
+    os.Mkdir(BASE_SOCKET_PATH, os.ModePerm)
     return &Driver{
         DriverConfig: configArg,
         Context: contextArg,
@@ -257,6 +261,27 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 
+    port := &network.Port{
+        PortName:fmt.Sprintf("%s_monitor", module.GetName()),
+        Virtual:false,
+        DPDK:false,
+        UnixSocket:true,
+        SocketPath:fmt.Sprintf(SOCKET_PATH, module.GetName()),
+    }
+    if err := d.createPort(port); err != nil {
+		return err
+	}
+    monitor := &network.EgressPort{
+        Port:port,
+    }
+    monitor.SetName(port.PortName)
+    monitor.IGates = network.MakeGateMap()
+    monitor.IGates[0] = rep
+
+	if err := d.createPortOutModule(monitor); err != nil {
+		return err
+	}
+
 	// wire BESS ports
 	if err := d.wireModule(l2Fwd); err != nil {
 		return err
@@ -266,6 +291,9 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 
+	if err := d.wireModule(monitor); err != nil {
+		return err
+	}
 	// Set default gate for l2forward to 0
 	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 0}
 	gateAny, err := ptypes.MarshalAny(gateArg)
@@ -282,6 +310,10 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		log.Errorf("Failed to set default gate for l2forward, error: %s", res.GetError().GetErrmsg())
 		return errors.New(res.GetError().GetErrmsg())
 	}
+    // We need to recover the original mod name from Switch_%s
+    orig_name := module.GetName() //expected as Switch_%s - from pipeline module
+    r := NewReader(orig_name[len("Switch_"):], port.SocketPath, d.notifications)
+    go r.Run()
 	log.Infof("BESS Switch created with L2FWD: %s, Replicate: %s", l2Fwd.Name, rep.Name)
 	return nil
 }

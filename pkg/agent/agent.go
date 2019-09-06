@@ -671,7 +671,7 @@ func (s *NimbessAgent) processNotification() (bool) {
         for key, pipeline := range s.Pipelines {
             if key != fibRequest.Port {
                 // no Routing for self
-                s.addMACtoL2FIB(fibRequest.MAC, pipeline, fibRequest.Port)
+                s.addMACtoL2FIB(fibRequest.MAC, pipeline, fmt.Sprintf("%s_egress", fibRequest.Port))
             }
         }
     }
