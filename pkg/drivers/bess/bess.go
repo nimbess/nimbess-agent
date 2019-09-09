@@ -23,6 +23,7 @@ import (
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	"github.com/nimbess/nimbess-agent/pkg/proto/bess_pb"
+	"net/url"
 	"path"
 	"reflect"
 	"strings"
@@ -44,6 +45,7 @@ const (
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
 	REPLICATE = "Replicate"
+	URLFILTER = "UrlFilter"
 )
 
 // SupportedObjects contains the BESS objects supported by this driver
@@ -157,6 +159,7 @@ func remove(s []int64, i int) []int64 {
 
 // RenderModules creates resources for modules and then wires them to pipeline
 func (d *Driver) RenderModules(modules []network.PipelineModule) error {
+	log.Debugf("Rendering Nimbess pipeline: %+v", modules)
 	if modules == nil {
 		return errors.New("cannot render module to pipeline. Module is null")
 	}
@@ -189,6 +192,14 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 			if err := d.createSwitch(module.(*network.Switch)); err != nil {
 				return err
 			}
+		case reflect.TypeOf(&network.URLFilter{}):
+			if exists, _ := objectExists(d.bessClient, module.GetName(), MODULE); exists == true {
+				log.Debugf("Skipping render for %s, already exists", module.GetName())
+				continue
+			}
+			if err := d.createUrlFilter(module.(*network.URLFilter)); err != nil {
+				return err
+			}
 		default:
 			log.Errorf("Cannot render unknown Module %v", module)
 			return errors.New("error rendering unknown module")
@@ -207,6 +218,21 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 	}
 	return nil
 
+}
+
+// ReRenderModules updates pipeline resources based on a change to the pipeline
+// This should detect changes and update only necessary pieces, but for now it deletes and re-renders the pipeline
+func (d *Driver) ReRenderModules(modules []network.PipelineModule) error {
+	if modules == nil {
+		return errors.New("cannot render module to pipeline. Modules is null")
+	}
+
+	// Delete all modules in the port pipeline except for egress ports
+	log.Infof("Deleting pipeline: %+v", modules)
+	if err := d.DeleteModules(modules, false); err != nil {
+		return err
+	}
+	return d.RenderModules(modules)
 }
 
 // createSwitch builds an L2Forward and Replicator BESS modules to represent a Nimbess Switch Forwarder
@@ -369,12 +395,14 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 				}
 			}
 		}
-		// If module was a switch and we wired up a new egress connection to replicate, we need to update
-		// replication gates
+		// If module was a switch and we wired up a new egress connection, we need to update replication gates
 		if reflect.TypeOf(mod1) == reflect.TypeOf(&network.Switch{}) {
-			gates := make([]int64, eGate+1)
-			for i := range gates {
-				gates[i] = int64(i)
+			// figure out replication gates and update them
+			gates := make([]int64, len(mod1.GetEGateMap()))
+			i := 0
+			for k := range mod1.GetEGateMap() {
+				gates[i] = int64(k)
+				i++
 			}
 			repArg := &bess_pb.ReplicateCommandSetGatesArg{Gates: gates}
 			repAny, err := ptypes.MarshalAny(repArg)
@@ -392,7 +420,7 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 				log.Errorf("Failed to set replication gates, error: %s", res.GetError().GetErrmsg())
 				return errors.New(res.GetError().GetErrmsg())
 			}
-			log.Debugf("Replication gates updated for switch %s", mod1.GetName())
+			log.Debugf("Replication gates updated for switch %s, %v", mod1.GetName(), gates)
 		}
 	}
 	log.Debugf("Completed wiring ingress gates for module %s", module.GetName())
@@ -405,7 +433,7 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 		// We now need to get iGate for connecting module
 		var iGate network.Gate
 		realModName := mod2.GetName()
-		// If module is a Switch we know in BESS this previous module must be a replicate so fix name
+		// If mod2 is a Switch we know in BESS this next module must be a l2forward so fix name
 		if reflect.TypeOf(mod2) == reflect.TypeOf(&network.Switch{}) {
 			realModName = fmt.Sprintf("%s_l2forward", mod2.GetName())
 		}
@@ -534,6 +562,60 @@ func (d *Driver) createPortOutModule(module *network.EgressPort) error {
 		Name:   module.Name,
 		Mclass: PORTOUT,
 		Arg:    portAny,
+	}
+	return d.createModule(portReq)
+}
+
+// createUrlFilter creates an URL Filter module in BESS
+func (d *Driver) createUrlFilter(module *network.URLFilter) error {
+	log.Debugf("Creating BESS URL Filter: %s", module.Name)
+	var blackList []*bess_pb.UrlFilterArg_Url
+
+	for _, site := range module.Urls {
+		log.Debugf("Adding site to URL Filter: %s", site)
+		// check if URL has a scheme. If it does then can use url parse
+		u, uErr := url.Parse(site)
+		if strings.Contains(site, ":") && uErr == nil {
+			log.Debugf("Appending URL to blacklist, host: %s, path: %s", u.Host, u.Path)
+			blackList = append(blackList, &bess_pb.UrlFilterArg_Url{
+				Host: u.Host,
+				Path: u.Path,
+			})
+		} else {
+			paths := strings.SplitN(site, "/", 2)
+			if len(paths) == 0 {
+				log.Warnf("Skipping site: %s, failed to parse as it is empty", site)
+				continue
+			} else if len(paths) == 1 {
+				host := paths[0]
+				log.Debugf("Appending site to blacklist, host: %s, path: none", host)
+				blackList = append(blackList, &bess_pb.UrlFilterArg_Url{
+					Host: host,
+				})
+			} else {
+				host := paths[0]
+				path := fmt.Sprintf("/%s", paths[1])
+				log.Debugf("Appending site to blacklist, host: %s, path: %s", host, path)
+				blackList = append(blackList, &bess_pb.UrlFilterArg_Url{
+					Host: host,
+					Path: path,
+				})
+			}
+		}
+	}
+	// Create UrlFilter Module
+	urlArgs := &bess_pb.UrlFilterArg{
+		Blacklist: blackList,
+	}
+	urlAny, err := ptypes.MarshalAny(urlArgs)
+	if err != nil {
+		log.Errorf("Failure to serialize port args: %v", urlArgs)
+		return err
+	}
+	portReq := &bess_pb.CreateModuleRequest{
+		Name:   module.Name,
+		Mclass: URLFILTER,
+		Arg:    urlAny,
 	}
 	return d.createModule(portReq)
 }
@@ -731,6 +813,8 @@ func (d *Driver) DeleteModules(modules []network.PipelineModule, egress bool) er
 			if err := d.deleteModule(fmt.Sprintf("%s_replicate", module.GetName())); err != nil {
 				return err
 			}
+		} else if reflect.TypeOf(module) == reflect.TypeOf(&network.EgressPort{}) && !egress {
+			continue
 		} else {
 			if err := d.deleteModule(module.GetName()); err != nil {
 				return err

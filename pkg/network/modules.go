@@ -18,6 +18,7 @@
 package network
 
 import (
+	"github.com/nimbess/stargazer/pkg/crd/api/unp/v1"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -38,6 +39,8 @@ type PipelineModule interface {
 	SetEGateMap(m map[Gate]PipelineModule)
 	SetMeta(s string)
 	GetMeta() string
+	GetIGate(module PipelineModule) *Gate
+	GetEGate(module PipelineModule) *Gate
 }
 
 // Module represents a generic Network Function.
@@ -82,6 +85,12 @@ type IngressPort struct {
 type EgressPort struct {
 	Module
 	*Port
+}
+
+// URLFilter
+type URLFilter struct {
+	Module
+	v1.URLFilter
 }
 
 // GetName returns the Module's name
@@ -167,4 +176,31 @@ func (m *Module) SetIGateMap(gMap map[Gate]PipelineModule) {
 // SetEGateMap sets the Egress Gate Map for a Module
 func (m *Module) SetEGateMap(gMap map[Gate]PipelineModule) {
 	m.IGates = gMap
+}
+
+// GetIGate gets the corresponding gate
+func (m *Module) GetIGate(module PipelineModule) *Gate {
+	if module == nil {
+		return nil
+	}
+	return getGate(m.GetIGateMap(), module)
+
+}
+
+// GetEGate gets the corresponding gate
+func (m *Module) GetEGate(module PipelineModule) *Gate {
+	if module == nil {
+		return nil
+	}
+	return getGate(m.GetEGateMap(), module)
+}
+
+func getGate(gateMap map[Gate]PipelineModule, module PipelineModule) *Gate {
+	for k, v := range gateMap {
+		if v == module {
+			return &k
+		}
+	}
+
+	return nil
 }

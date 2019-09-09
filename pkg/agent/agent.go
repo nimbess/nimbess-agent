@@ -385,6 +385,21 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	return s.createPortPipeline(port, metaKey)
 }
 
+func (s *NimbessAgent) updateFIBFromEgress(pipeline *NimbessPipeline) error {
+	egressPorts := pipeline.GetEgressPorts()
+	if len(egressPorts) == 0 {
+		log.Debugf("No egress ports detected, skipping FIB update")
+		return nil
+	}
+
+	for _, ePort := range egressPorts {
+		if err := s.updateFIB(pipeline, *ePort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // updateL2FIB adds a new FIB entry to a Pipeline's forwarder
 func (s *NimbessAgent) updateL2FIB(l2Forwarder *network.Switch, macAddr string, gate network.Gate) error {
 	if err := s.Driver.AddEntryL2FIB(l2Forwarder, macAddr, gate); err != nil {
@@ -441,7 +456,7 @@ func (s *NimbessAgent) connectEgressPort(port *network.EgressPort, pipeline *Nim
 	port.Connect(lastMod, false, nil)
 	// Connect last module to port
 	lastMod.Connect(port, true, nil)
-	pipeline.EgressPorts = append(pipeline.EgressPorts, port)
+	pipeline.Modules = append(pipeline.Modules, port)
 	if err := s.Driver.RenderModules([]network.PipelineModule{port}); err != nil {
 		log.Error("Failed to Add Egress port to pipeline")
 		return err
@@ -484,8 +499,8 @@ func (s *NimbessAgent) removeEgressPort(name string, metaKey string) error {
 			return nil
 		}
 	}
-	log.Error("Failed to find Egress Port in MetaPipeline: %s", metaKey)
-	return fmt.Errorf("unable to find egress port %s to remove in metapipeline with key: %s", name, metaKey)
+	log.Warnf("Failed to find Egress Port in MetaPipeline: %s", metaKey)
+	return nil
 }
 
 // Delete implements CNI Delete Handler.
@@ -651,9 +666,22 @@ func (s *NimbessAgent) Init() error {
 	return nil
 }
 
+// EnsureNetwork ensures that a network exists already in meta pipelines and if not, creates it from
+// a network attachment definition. If the network attachment definition does not exist, an error is thrown.
+// boolean returned is true if this network already existed in meta pipelines, false if it was initialized here
+func (s *NimbessAgent) EnsureNetwork(network string) (bool, error) {
+	if _, ok := s.MetaPipelines[network]; ok {
+		return true, nil
+	}
+	// TODO(trozet): Need to do network attachment CRD lookup for network
+	// for now just return error if network doesn't already exist
+	return false, fmt.Errorf("failed to ensure network exists: %s", network)
+}
+
 // Run starts up the main Agent daemon.
 func (s *NimbessAgent) Run() error {
 	log.Info("Starting Nimbess Agent...")
+	defer s.EtcdClient.Close()
 	log.Info("Connecting to Data Plane")
 	dpConn := s.Driver.Connect()
 	defer dpConn.Close()
@@ -662,6 +690,14 @@ func (s *NimbessAgent) Run() error {
 		log.Errorf("Failed to listen on port: %d", s.Config.Port)
 		return err
 	}
+
+	// Create watchers and start handler for Stargazer models
+	if err = s.runGazers(); err != nil {
+		log.Errorf("Error while running gazers")
+		return err
+	}
+
+	// Start main server (blocking)
 	log.Info("Starting Nimbess gRPC server...")
 	grpcServer := grpc.NewServer()
 	cni.RegisterRemoteCNIServer(grpcServer, s)
