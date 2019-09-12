@@ -116,8 +116,8 @@ spec:
           hostPath:
             path: /etc/cni/net.d
         - name: hugepages
-          hostPath:
-            path: /dev/hugepages
+          emptyDir:
+            medium: HugePages
         - name: proc-dir
           hostPath:
             path: /proc
