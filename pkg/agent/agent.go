@@ -661,6 +661,8 @@ func (s *NimbessAgent) processNotification() (bool) {
 
     fibRequest := <-s.notifications
 
+	log.Debugf("Processing FIB Request %s MAC %s", fibRequest.Command, fibRequest.MAC)
+
     if fibRequest.Command == "LEARN" {
         // Learned
         s.l2fib[fibRequest.MAC] = L2FIBEntry {
@@ -700,8 +702,10 @@ func (s *NimbessAgent) processNotification() (bool) {
 }
 
 func (s *NimbessAgent) runNotifications() {
+	log.Debugf("Started Notification thread")
     for s.processNotification() {
     }
+	log.Debugf("Notification thread exited")
 }
 
 
