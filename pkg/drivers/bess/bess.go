@@ -47,8 +47,7 @@ const (
 	L2FORWARD = "L2Forward"
 	REPLICATE = "Replicate"
     DROPGATE  = 8192    // This needs to be adjusted if MAX_GATES in bess changes
-    BASE_SOCKET_PATH = "/var/run/nimbess"
-    SOCKET_PATH = "/var/run/nimbess/%s"
+    SOCKET_PATH = "/var/lib/nimbess/cni/u-%s"
 )
 
 // SupportedObjects contains the BESS objects supported by this driver
@@ -63,7 +62,6 @@ type Driver struct {
 }
 
 func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Driver){
-    os.Mkdir(BASE_SOCKET_PATH, os.ModePerm)
     return &Driver{
         DriverConfig: configArg,
         Context: contextArg,
