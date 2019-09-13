@@ -203,6 +203,9 @@ func (s *NimbessPipeline) DisconnectPipeline(modType reflect.Type) error {
 		return fmt.Errorf("could not find last module in pipeline %s for disconnect", s.Name)
 	}
 	for egate, mod := range lastMod.GetEGateMap() {
+        if mod == nil {
+            continue
+        }
 		// search gates in connecting module to remove
 		for igate, iMod := range mod.GetIGateMap() {
 			if iMod == lastMod {
