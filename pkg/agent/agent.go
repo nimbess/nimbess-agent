@@ -656,12 +656,11 @@ func annotatePod(k8sClient kubernetes.Interface, req *cni.CNIRequest, configData
 
 func (s *NimbessAgent) processNotification() (bool) {
 
+    fibRequest := <-s.notifications
+	log.Debugf("Processing FIB Request %s MAC %s", fibRequest.Command, fibRequest.MAC)
+
     s.Mu.Lock()
     defer s.Mu.Unlock()
-
-    fibRequest := <-s.notifications
-
-	log.Debugf("Processing FIB Request %s MAC %s", fibRequest.Command, fibRequest.MAC)
 
     if fibRequest.Command == "LEARN" {
         // Learned
