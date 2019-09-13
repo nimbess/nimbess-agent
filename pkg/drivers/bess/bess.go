@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-    "os"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/nimbess/nimbess-agent/pkg/network"
