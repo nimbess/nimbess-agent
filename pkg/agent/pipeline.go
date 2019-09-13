@@ -194,6 +194,9 @@ func (s *NimbessPipeline) GetLastModule(excludedTypes []reflect.Type) network.Pi
 
 // DisconnectPipeline disconnects any modules of type modType that are attached to the last module in a pipeline
 func (s *NimbessPipeline) DisconnectPipeline(modType reflect.Type) error {
+    if modType == nil {
+        return nil
+    }
 	log.Debugf("Searching for modules to disconnect from pipeline %s of type %s", s.Name, modType.Name())
 	lastMod := s.GetLastModule([]reflect.Type{modType})
 	if lastMod == nil {
