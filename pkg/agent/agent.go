@@ -712,6 +712,7 @@ func (s *NimbessAgent) runNotifications() {
 func (s *NimbessAgent) Run() error {
 	log.Info("Starting Nimbess Agent...")
 	log.Info("Connecting to Data Plane")
+    s.l2fib = make(map[string]L2FIBEntry)
 	dpConn := s.Driver.Connect()
     s.notifications = s.Driver.GetNotifications()
     go s.runNotifications()
