@@ -837,6 +837,14 @@ func (d *Driver) DeleteModules(modules []network.PipelineModule, egress bool) er
 			if err := d.deleteModule(fmt.Sprintf("%s_replicate", module.GetName())); err != nil {
 				return err
 			}
+			log.Debug("Switch detected, deleting monitor PortOut")
+			if err := d.deleteModule(fmt.Sprintf("%s_monitor", module.GetName())); err != nil {
+				return err
+			}
+			log.Debug("Switch detected, deleting monitor Port")
+			if err := d.DeletePort(fmt.Sprintf("%s_monitor", module.GetName())); err != nil {
+				return err
+			}
 		} else {
 			if err := d.deleteModule(module.GetName()); err != nil {
 				return err

@@ -42,7 +42,7 @@ func NewReader (portArg string, pathArg string, controlChan chan network.L2FIBCo
             return r
         }
         if err != nil {
-            log.Debugf("Could Not connect, retry no %i in one second:", i)
+            log.Debugf("Could Not connect to %s, error %s, retry no %d in one second:", r.path, err, i)
         }
         time.Sleep(time.Second)
     }
