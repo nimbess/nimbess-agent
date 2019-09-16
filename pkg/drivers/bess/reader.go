@@ -35,11 +35,18 @@ func NewReader (portArg string, pathArg string, controlChan chan network.L2FIBCo
         buffer: make([]byte, 2048),
         control: controlChan,
     }
-    c, err := net.Dial("unixpacket", r.path)
-    r.c = c
-    if err != nil {
-        log.Fatal("Could Not connect:", err)
+    for i := 0; i < 10; i++ {
+        c, err := net.Dial("unixpacket", r.path)
+        if (err == nil) {
+            r.c = c
+            return r
+        }
+        if err != nil {
+            log.Debugf("Could Not connect, retry no %i in one second:", i)
+        }
+        time.Sleep(time.Second)
     }
+    log.Fatal("Could Not connect:")
     return r
 }
 
