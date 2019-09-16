@@ -181,6 +181,6 @@ func (m *Module) SetEGateMap(gMap map[Gate]PipelineModule) {
 
 func MakeGateMap() map[Gate]PipelineModule {
     rGates := make(map[Gate]PipelineModule)
-    rGates[0] = nil
+//    rGates[0] = nil 
     return rGates
 }

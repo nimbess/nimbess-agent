@@ -273,7 +273,8 @@ func (d *Driver) createSwitch(module *network.Switch) error {
     }
     monitor.SetName(port.PortName)
     monitor.IGates = network.MakeGateMap()
-    monitor.IGates[0] = rep
+    monitor.IGates[rep.GetNextEGate()] = rep
+    rep.EGates[rep.GetNextEGate()] = monitor
 
 	if err := d.createPortOutModule(monitor); err != nil {
 		return err
