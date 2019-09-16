@@ -668,6 +668,7 @@ func (d *Driver) createPort(port *network.Port) error {
 		Driver: portDriver,
 		Arg:    portAny,
 	}
+	log.Debugf("Requesting a port create for: %v, %v, %+v", port.PortName, portDriver, portAny)
 	portRes, err := d.bessClient.CreatePort(d.Context, portRequest)
 
 	if err != nil || portRes.Error.Errmsg != "" {
