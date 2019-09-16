@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
+	"github.com/google/uuid"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	"github.com/nimbess/nimbess-agent/pkg/proto/bess_pb"
 	"path"
@@ -58,6 +59,7 @@ type Driver struct {
 	bessClient bess_pb.BESSControlClient
 	Context    context.Context
     notifications chan network.L2FIBCommand
+    socketmap map[string]string
 }
 
 func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Driver){
@@ -65,8 +67,22 @@ func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Dri
         DriverConfig: configArg,
         Context: contextArg,
         notifications: make(chan network.L2FIBCommand),
+        socketmap: make(map[string]string),
     }
 }
+
+// map various socket paths onto a semirandom sequence which will fit
+// path length restriction
+
+func (d *Driver) socketMapEntry(arg string) string {
+    if entry, err := d.socketmap[arg]; err {
+        return entry
+    }
+    entry, _ := uuid.NewRandom()
+    d.socketmap[arg] = entry.String()
+    return d.socketmap[arg]
+}
+
 
 // Connect is used to setup gRPC connection with the data plane.
 func (d *Driver) Connect() *grpc.ClientConn {
@@ -257,14 +273,14 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	if err := d.createReplicateModule(*rep); err != nil {
 		return err
 	}
-
     port := &network.Port{
         PortName:fmt.Sprintf("%s_monitor", module.GetName()),
         Virtual:false,
         DPDK:false,
         UnixSocket:true,
-        SocketPath:fmt.Sprintf(SOCKET_PATH, module.GetName()),
+        SocketPath:fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
     }
+    // r := NewReader(orig_name[len("Switch_"):], port.SocketPath, d.notifications)
     if err := d.createPort(port); err != nil {
 		return err
 	}
