@@ -280,7 +280,6 @@ func (d *Driver) createSwitch(module *network.Switch) error {
         UnixSocket:true,
         SocketPath:fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
     }
-    // r := NewReader(orig_name[len("Switch_"):], port.SocketPath, d.notifications)
     if err := d.createPort(port); err != nil {
 		return err
 	}
