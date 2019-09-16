@@ -380,6 +380,7 @@ func (s *NimbessPipeline) RemoveModule(modName string, agent *NimbessAgent) erro
 	// remove module from modules slice
 	s.Modules = append(s.Modules[:modIdx], s.Modules[modIdx+1:]...)
 	if agent != nil {
+		defer agent.Driver.Commit()
 		if err := agent.Driver.ReRenderModules(s.Modules); err != nil {
 			return err
 		}
@@ -387,7 +388,10 @@ func (s *NimbessPipeline) RemoveModule(modName string, agent *NimbessAgent) erro
 		if err := agent.updateFIBFromEgress(s); err != nil {
 			return err
 		}
-		agent.Driver.Commit()
+		// remove old module
+		if err := agent.Driver.DeleteModules([]network.PipelineModule{mod}, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }
