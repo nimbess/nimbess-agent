@@ -25,6 +25,7 @@ import (
 type Driver interface {
 	Connect() *grpc.ClientConn
 	RenderModules(module []network.PipelineModule) error
+	ReRenderModules(module []network.PipelineModule) error
 	DeleteModules(modules []network.PipelineModule, egress bool) error
 	DeletePort(name string) error
 	AddEntryL2FIB(module *network.Switch, macAddr string, gate network.Gate) error

@@ -22,8 +22,11 @@ import (
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/plugins/pkg/ip"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/google/uuid"
+	"github.com/denisbrodbeck/machineid"
 	"github.com/intel/userspace-cni-network-plugin/usrsptypes"
+	"github.com/nimbess/nimbess-agent/pkg/agent/config"
+	"github.com/nimbess/nimbess-agent/pkg/etcdv3"
+	"github.com/nimbess/nimbess-agent/pkg/etcdv3/model"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -37,6 +40,7 @@ import (
 	"path"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/nimbess/nimbess-agent/pkg/drivers"
 	"github.com/nimbess/nimbess-agent/pkg/proto/cni"
@@ -78,17 +82,19 @@ type L2FIBEntry struct {
 }
 
 type NimbessAgent struct {
-	ID         uuid.UUID
-	Mu         *sync.Mutex
-	Config     *NimbessConfig
-	Driver     drivers.Driver
-	KubeClient kubernetes.Interface
+	ID          string
+	EtcdContext context.Context
+	Mu          *sync.Mutex
+	Config      *config.NimbessConfig
+	Driver      drivers.Driver
+	KubeClient  kubernetes.Interface
 	// Pipelines contains a map of port name to pipeline pointer
 	Pipelines map[string]*NimbessPipeline
 	// MetaPipelines contains a map of network name to abstract pipelines
 	MetaPipelines map[string]*NimbessPipeline
     l2fib map[string]L2FIBEntry
     notifications chan network.L2FIBCommand
+	EtcdClient    etcdv3.Client
 }
 
 // getPortName translates a CNI request into a Nimbess Port Identifier
@@ -116,7 +122,7 @@ func (s *NimbessAgent) createPortPipeline(port *network.Port, metaKey string) (*
 	s.Pipelines[portName] = &NimbessPipeline{Mu: s.Mu, Driver: s.Driver, MetaKey: metaKey,
 		Name: fmt.Sprintf("%s_pipeline", portName), Modules: make([]network.PipelineModule, 0),
 		EgressPorts: make([]*network.EgressPort, 0)}
-	if err := s.Pipelines[portName].Init(portName, L2DriverMode, s.MetaPipelines[metaKey]); err != nil {
+	if err := s.Pipelines[portName].Init(portName, config.L2DriverMode, s.MetaPipelines[metaKey]); err != nil {
 		log.Error("Error while initializing Port Pipeline: %v", err)
 		return &cni.CNIReply{Result: CniIncompatible}, err
 	}
@@ -242,7 +248,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	// Initialize pipeline
 	// Check if meta pipeline exists for this network
 	var metaKey string
-	if s.Config.Network.Driver == L2DriverMode {
+	if s.Config.Network.Driver == config.L2DriverMode {
 		metaKey = req.NetworkConfig.GetName()
 	} else {
 		log.Error("Only L2 Network Driver mode is currently supported")
@@ -260,7 +266,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		s.MetaPipelines[metaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", metaKey),
 			MetaKey: metaKey, Modules: make([]network.PipelineModule, 0),
 			EgressPorts: make([]*network.EgressPort, 0)}
-		if err := s.MetaPipelines[metaKey].Init("", L2DriverMode, nil); err != nil {
+		if err := s.MetaPipelines[metaKey].Init("", config.L2DriverMode, nil); err != nil {
 			log.Error("Error while initializing MetaPipeline: %v", err)
 			return &cni.CNIReply{Result: CniIncompatible}, err
 		}
@@ -321,7 +327,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		s.MetaPipelines[fastMetaKey] = &NimbessPipeline{Name: fmt.Sprintf("%s_meta_pipeline", fastMetaKey),
 			MetaKey: fastMetaKey, Modules: make([]network.PipelineModule, 0),
 			EgressPorts: make([]*network.EgressPort, 0)}
-		if err := s.MetaPipelines[fastMetaKey].Init("", L2DriverMode, nil); err != nil {
+		if err := s.MetaPipelines[fastMetaKey].Init("", config.L2DriverMode, nil); err != nil {
 			log.Error("Error while initializing MetaPipeline: %v", err)
 			return &cni.CNIReply{Result: CniIncompatible}, err
 		}
@@ -391,6 +397,21 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	return s.createPortPipeline(port, metaKey)
 }
 
+func (s *NimbessAgent) updateFIBFromEgress(pipeline *NimbessPipeline) error {
+	egressPorts := pipeline.GetEgressPorts()
+	if len(egressPorts) == 0 {
+		log.Debugf("No egress ports detected, skipping FIB update")
+		return nil
+	}
+
+	for _, ePort := range egressPorts {
+		if err := s.updateFIB(pipeline, *ePort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // updateL2FIB adds a new FIB entry to a Pipeline's forwarder
 func (s *NimbessAgent) updateL2FIB(l2Forwarder *network.Switch, macAddr string, gate network.Gate) error {
 	if err := s.Driver.AddEntryL2FIB(l2Forwarder, macAddr, gate); err != nil {
@@ -437,7 +458,7 @@ func (s *NimbessAgent) delMACfromFIB(MAC string, pipeline *NimbessPipeline) erro
 func (s *NimbessAgent) updateFIB(pipeline *NimbessPipeline, port network.EgressPort) error {
 	log.Debugf("Updating L2FIB for pipeline %s, with port %s", pipeline.Name, port.GetName())
 	// Check if L2 or L3
-	if s.Config.Driver == L2DriverMode {
+	if s.Config.Driver == config.L2DriverMode {
 		if s.Config.MacLearn {
 			log.Info("Ignoring static FIB update because MAC learning is enabled")
 			return nil
@@ -482,7 +503,7 @@ func (s *NimbessAgent) connectEgressPort(port *network.EgressPort, pipeline *Nim
 	port.Connect(lastMod, false, nil)
 	// Connect last module to port
 	lastMod.Connect(port, true, nil)
-	pipeline.EgressPorts = append(pipeline.EgressPorts, port)
+	pipeline.Modules = append(pipeline.Modules, port)
 	if err := s.Driver.RenderModules([]network.PipelineModule{port}); err != nil {
 		log.Error("Failed to Add Egress port to pipeline")
 		return err
@@ -525,8 +546,8 @@ func (s *NimbessAgent) removeEgressPort(name string, metaKey string) error {
 			return nil
 		}
 	}
-	log.Error("Failed to find Egress Port in MetaPipeline: %s", metaKey)
-	return fmt.Errorf("unable to find egress port %s to remove in metapipeline with key: %s", name, metaKey)
+	log.Warnf("Failed to find Egress Port in MetaPipeline: %s", metaKey)
+	return nil
 }
 
 // Delete implements CNI Delete Handler.
@@ -708,9 +729,60 @@ func (s *NimbessAgent) runNotifications() {
 }
 
 
+// Init initializes the agent
+func (s *NimbessAgent) Init() error {
+	firstStart := true
+	// Find agent ID
+	id, err := machineid.ID()
+	if err != nil {
+		return err
+	} else if id == "" {
+		return errors.New("unable to find machine ID")
+	}
+
+	log.Infof("Agent ID: %s", id)
+	s.ID = id
+	k := model.AgentKey{
+		MachineID: id,
+	}
+	kv := &model.KVPair{Key: k, Value: model.Agent{LastStart: time.Now().String()}}
+	// check for ID in etcd, if exists we know this is not first time startup
+	err = s.EtcdClient.Create(s.EtcdContext, kv)
+	if err != nil {
+		if cerr, ok := err.(*etcdv3.StorageError); ok {
+			if cerr.Code == etcdv3.ErrCodeKeyExists {
+				firstStart = false
+				log.Info("Previous agent data detected in database")
+			} else {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	// TODO(trozet) handle resync if not first start of data plane
+	// we want to do this before Agent Runs to and accepts CNI requests
+	log.Infof("Agent has finished initialization, first time startup: %t", firstStart)
+	return nil
+}
+
+// EnsureNetwork ensures that a network exists already in meta pipelines and if not, creates it from
+// a network attachment definition. If the network attachment definition does not exist, an error is thrown.
+// boolean returned is true if this network already existed in meta pipelines, false if it was initialized here
+func (s *NimbessAgent) EnsureNetwork(network string) (bool, error) {
+	if _, ok := s.MetaPipelines[network]; ok {
+		return true, nil
+	}
+	// TODO(trozet): Need to do network attachment CRD lookup for network
+	// for now just return error if network doesn't already exist
+	return false, fmt.Errorf("failed to ensure network exists: %s", network)
+}
+
 // Run starts up the main Agent daemon.
 func (s *NimbessAgent) Run() error {
 	log.Info("Starting Nimbess Agent...")
+	defer s.EtcdClient.Close()
 	log.Info("Connecting to Data Plane")
     s.l2fib = make(map[string]L2FIBEntry)
 	dpConn := s.Driver.Connect()
@@ -722,6 +794,14 @@ func (s *NimbessAgent) Run() error {
 		log.Errorf("Failed to listen on port: %d", s.Config.Port)
 		return err
 	}
+
+	// Create watchers and start handler for Stargazer models
+	if err = s.runGazers(); err != nil {
+		log.Errorf("Error while running gazers")
+		return err
+	}
+
+	// Start main server (blocking)
 	log.Info("Starting Nimbess gRPC server...")
 	grpcServer := grpc.NewServer()
 	cni.RegisterRemoteCNIServer(grpcServer, s)
