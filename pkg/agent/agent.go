@@ -92,7 +92,6 @@ type NimbessAgent struct {
 	Pipelines map[string]*NimbessPipeline
 	// MetaPipelines contains a map of network name to abstract pipelines
 	MetaPipelines map[string]*NimbessPipeline
-	l2fib map[string] *L2FIBEntry
 	notifications chan network.L2FIBCommand
 	EtcdClient    etcdv3.Client
 }
@@ -465,7 +464,7 @@ func (s *NimbessAgent) updateFIB(pipeline *NimbessPipeline, port network.EgressP
 			log.Errorf("Unable to find Forwarding Module in pipeline: %s", pipeline.Name)
 			return errors.New("unable to find Forwarding Module in Pipeline")
 		}
-		s.l2fib[port.MacAddr] = &L2FIBEntry {
+		pipeline.l2fib[port.MacAddr] = &L2FIBEntry {
 			permanent: true,
 			age:0,
 			port:port.GetName(),
@@ -562,21 +561,23 @@ func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CN
 	}
 	reqPortName := getPortName(req)
 	log.Infof("Received port del request for: %s", reqPortName)
-
+ 
 	// Protect Pipelines and driver during modification
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
 	entriesToDelete := make([]string, 0)
-	for MAC, entry := range s.l2fib {
-		if entry.port == reqPortName {
-			entriesToDelete = append(entriesToDelete, MAC)
+	if pipeline, ok := s.Pipelines[reqPortName]; ok {
+		for MAC, entry := range pipeline.l2fib {
+			if entry.port == reqPortName {
+				entriesToDelete = append(entriesToDelete, MAC)
+			}
+		}
+		for _, MAC := range entriesToDelete {
+			delete(pipeline.l2fib, MAC)
 		}
 	}
 
-	for _, MAC := range entriesToDelete {
-		delete(s.l2fib, MAC)
-	}
 
 	for _, portName := range []string{reqPortName, fmt.Sprintf("%s-%s", reqPortName, FastPathNetwork)} {
 		// Check if this port already has a pipeline
@@ -694,25 +695,26 @@ func (s *NimbessAgent) processNotification() (bool) {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
+	// pipeline's fib points to its parent metapipeline fib
+	pipeline, ok := s.Pipelines[fibRequest.Port]
+
+	if (!ok) {
+		log.Errorf("Failed to find metaPipeline and its fib")
+	}
+
 	if fibRequest.Command == "LEARN" {
-	// Learned
-        entry, ok := s.l2fib[fibRequest.MAC]
+		// Learned
+		entry, ok := pipeline.l2fib[fibRequest.MAC]
 		if (!ok) {
-			s.l2fib[fibRequest.MAC] = &L2FIBEntry {
+			pipeline.l2fib[fibRequest.MAC] = &L2FIBEntry {
 				permanent: false,
 				age:fibRequest.Setage,
 				port:fibRequest.Port,
 			}
-			metaKey := ""
-			for key, pipeline := range s.Pipelines {
-			    if key == fibRequest.Port {
-				metaKey = pipeline.MetaKey
-			    }
-			}
-			for key, pipeline := range s.Pipelines {
-				if (key != fibRequest.Port) && (metaKey == pipeline.MetaKey){
+			for key, targetPipeline := range s.Pipelines {
+				if (key != fibRequest.Port) {
 					// no Routing for self
-					s.addMACtoL2FIB(fibRequest.MAC, pipeline, fmt.Sprintf("%s_egress", fibRequest.Port))
+					s.addMACtoL2FIB(fibRequest.MAC, targetPipeline, fmt.Sprintf("%s_egress", fibRequest.Port))
 				}
 			}
 		} else {
@@ -722,23 +724,23 @@ func (s *NimbessAgent) processNotification() (bool) {
 		}
 	}
 	if  fibRequest.Command == "EXPIRE" {
-		entry, ok := s.l2fib[fibRequest.MAC]
+		entry, ok := pipeline.l2fib[fibRequest.MAC]
 		if ok && (!entry.permanent) {
-			delete(s.l2fib, fibRequest.MAC)
-			for _, pipeline := range s.Pipelines {
-				s.delMACfromFIB(fibRequest.MAC, pipeline)
+			delete(pipeline.l2fib, fibRequest.MAC)
+			for _, targetPipeline := range s.Pipelines {
+				s.delMACfromFIB(fibRequest.MAC, targetPipeline)
 			}
 		}
 	}
 	if fibRequest.Command == "ADD" {
-		s.l2fib[fibRequest.MAC] = &L2FIBEntry {
+		pipeline.l2fib[fibRequest.MAC] = &L2FIBEntry {
 			permanent: true,
 			age:0,
 			port:fibRequest.Port,
 		}
-		for key, pipeline := range s.Pipelines {
+		for key, targetPipeline := range s.Pipelines {
 			if key != fibRequest.Port {
-				s.addMACtoL2FIB(fibRequest.MAC, pipeline, fibRequest.Port)
+				s.addMACtoL2FIB(fibRequest.MAC, targetPipeline, fibRequest.Port)
 			}
 		}
 	}
@@ -808,7 +810,6 @@ func (s *NimbessAgent) Run() error {
 	log.Info("Starting Nimbess Agent...")
 	defer s.EtcdClient.Close()
 	log.Info("Connecting to Data Plane")
-	s.l2fib = make(map[string]*L2FIBEntry)
 	dpConn := s.Driver.Connect()
 	s.notifications = s.Driver.GetNotifications()
 	go s.runNotifications()
