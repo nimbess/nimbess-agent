@@ -9,6 +9,7 @@ data:
   # The CNI network configuration to install on each node.
   cni_network_config: |-
     {
+        "cniVersion": "0.4.0",
         "name": "k8s-pod-network",
         "type": "nimbess",
         "log_level": "info",
@@ -20,7 +21,7 @@ data:
 
 ---
 
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: nimbess-agent
