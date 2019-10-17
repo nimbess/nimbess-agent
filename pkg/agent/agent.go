@@ -561,7 +561,7 @@ func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CN
 	}
 	reqPortName := getPortName(req)
 	log.Infof("Received port del request for: %s", reqPortName)
- 
+
 	// Protect Pipelines and driver during modification
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -700,6 +700,7 @@ func (s *NimbessAgent) processNotification() (bool) {
 
 	if (!ok) {
 		log.Errorf("Failed to find metaPipeline and its fib")
+		return true /* This is bad, but it is not a reason to exit the notification thread */
 	}
 
 	if fibRequest.Command == "LEARN" {

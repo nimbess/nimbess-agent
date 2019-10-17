@@ -47,7 +47,7 @@ const (
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
 	REPLICATE = "Replicate"
-    SOCKET_PATH = "/var/lib/nimbess/cni/u-%s"
+	SOCKET_PATH = "/var/lib/nimbess/cni/u-%s"
 	URLFILTER = "UrlFilter"
 )
 
@@ -298,23 +298,23 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	if err := d.createReplicateModule(*rep); err != nil {
 		return err
 	}
-    port := &network.Port{
-        PortName:fmt.Sprintf("%s_monitor", module.GetName()),
-        Virtual:false,
-        DPDK:false,
-        UnixSocket:true,
-        SocketPath:fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
-    }
-    if err := d.createPort(port); err != nil {
+	port := &network.Port{
+		PortName:fmt.Sprintf("%s_monitor", module.GetName()),
+		Virtual:false,
+		DPDK:false,
+		UnixSocket:true,
+		SocketPath:fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
+	}
+	if err := d.createPort(port); err != nil {
 		return err
 	}
-    monitor := &network.EgressPort{
-        Port:port,
-    }
-    monitor.SetName(port.PortName)
-    monitor.IGates = network.MakeGateMap()
-    monitor.IGates[rep.GetNextEGate()] = rep
-    rep.EGates[rep.GetNextEGate()] = monitor
+	monitor := &network.EgressPort{
+		Port:port,
+	}
+	monitor.SetName(port.PortName)
+	monitor.IGates = network.MakeGateMap()
+	monitor.IGates[rep.GetNextEGate()] = rep
+	rep.EGates[rep.GetNextEGate()] = monitor
 
 	if err := d.createPortOutModule(monitor); err != nil {
 		return err
@@ -348,10 +348,10 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		log.Errorf("Failed to set default gate for l2forward, error: %s", res.GetError().GetErrmsg())
 		return errors.New(res.GetError().GetErrmsg())
 	}
-    // We need to recover the original mod name from Switch_%s
-    orig_name := module.GetName() //expected as Switch_%s - from pipeline module
-    r := NewReader(orig_name[len("Switch_"):], port.SocketPath, d.notifications)
-    go r.Run()
+	// We need to recover the original mod name from Switch_%s
+	orig_name := module.GetName() //expected as Switch_%s - from pipeline module
+	r := NewReader(orig_name[len("Switch_"):], port.SocketPath, d.notifications)
+	go r.Run()
 	log.Infof("BESS Switch created with L2FWD: %s, Replicate: %s", l2Fwd.Name, rep.Name)
 	return nil
 }
