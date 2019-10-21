@@ -349,8 +349,15 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return errors.New(res.GetError().GetErrmsg())
 	}
 	// We need to recover the original mod name from Switch_%s
-	orig_name := module.GetName() //expected as Switch_%s - from pipeline module
-	r := NewReader(orig_name[len("Switch_"):], port.SocketPath, d.notifications)
+	origName := module.GetName()
+	metaName := module.GetMeta() //expected as Switch_<meta name> - from pipeline module
+	if len(metaName) == 0 {
+		log.Warningf("Meta pipeline empty for Switch: %s", origName)
+	}
+	derivedPortName := origName[len(metaName)+1:] // remove "<MetaName>_" prefix
+	log.Debugf("Module name: %s, meta name: %s, port name: %s", origName, metaName, derivedPortName)
+	r := NewReader(derivedPortName, port.SocketPath, d.notifications)
+
 	go r.Run()
 	log.Infof("BESS Switch created with L2FWD: %s, Replicate: %s", l2Fwd.Name, rep.Name)
 	return nil

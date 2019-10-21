@@ -699,7 +699,7 @@ func (s *NimbessAgent) processNotification() (bool) {
 	pipeline, ok := s.Pipelines[fibRequest.Port]
 
 	if (!ok) {
-		log.Errorf("Failed to find metaPipeline and its fib")
+		log.Errorf("Failed to find metaPipeline and its fib for port: %s", fibRequest.Port)
 		return true /* This is bad, but it is not a reason to exit the notification thread */
 	}
 
