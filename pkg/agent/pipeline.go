@@ -38,6 +38,7 @@ type NimbessPipeline struct {
 	EgressPorts []*network.EgressPort
 	MetaKey     string
 	Gateway     string
+	l2fib       map[string]*L2FIBEntry
 }
 
 // GetModule returns the module
@@ -57,7 +58,7 @@ func (s *NimbessPipeline) GetModule(name string) network.PipelineModule {
 func (s *NimbessPipeline) AddPort(name string, port *network.Port) (*network.EgressPort, error) {
 	log.Infof("Adding new port %v to pipeline: %v", port, s.Name)
 	portMod := network.Module{Name: fmt.Sprintf("%s_ingress", name),
-		EGates: make(map[network.Gate]network.PipelineModule)}
+		EGates: network.MakeGateMap()}
 	// Create Ingress Port
 	iPort := &network.IngressPort{Port: port, Module: portMod}
 	s.Modules[0] = iPort
@@ -72,7 +73,7 @@ func (s *NimbessPipeline) AddPort(name string, port *network.Port) (*network.Egr
 
 	// Create Egress port
 	ePortMod := network.Module{Name: fmt.Sprintf("%s_egress", name),
-		IGates: make(map[network.Gate]network.PipelineModule)}
+		IGates: network.MakeGateMap()}
 	ePort := &network.EgressPort{Port: port, Module: ePortMod}
 	return ePort, nil
 }
@@ -81,8 +82,8 @@ func getForwarderModule(forwarder string, metaKey string) (network.PipelineModul
 	switch forwarder {
 	case config.L2DriverMode:
 		mod := network.Module{Name: fmt.Sprintf("Switch_%s", metaKey),
-			IGates: make(map[network.Gate]network.PipelineModule),
-			EGates: make(map[network.Gate]network.PipelineModule),
+			IGates: network.MakeGateMap(),
+			EGates: network.MakeGateMap(),
 		}
 		sMod := &network.Switch{Module: mod, L2FIB: make(map[string]network.Gate)}
 		return sMod, nil
@@ -105,6 +106,8 @@ func (s *NimbessPipeline) Init(port string, forwarder string, metaPipeline *Nimb
 		// Need to do deep copy Meta pipeline for port, and make unique module names
 		// Update linked list of modules by making new modules from meta pipeline for this pipeline
 		s.createPipeline(metaPipeline.Modules[0], port)
+		// fixup the copy of the l2fib created by createPipeline and replace it with a ref
+		s.l2fib = metaPipeline.l2fib
 	} else {
 		if len(s.Modules) > 0 {
 			log.Debugf("Pipeline already exists, ignoring Init on meta pipeline: %v", metaPipeline)
@@ -112,6 +115,7 @@ func (s *NimbessPipeline) Init(port string, forwarder string, metaPipeline *Nimb
 		}
 		// Need to create meta pipeline from scratch, just include forwarder module
 		mod, err := getForwarderModule(forwarder, s.MetaKey)
+		s.l2fib = make(map[string]*L2FIBEntry)
 		if err != nil {
 			return err
 		}
@@ -151,12 +155,16 @@ func (s *NimbessPipeline) createPipeline(module network.PipelineModule, port str
 
 	// Walk meta module Ingress gates and connect new port pipeline modules
 	for gate, mod := range module.GetIGateMap() {
-		newMod.Connect(s.createPipeline(mod, port), false, &gate)
+		if mod != nil {
+			newMod.Connect(s.createPipeline(mod, port), false, &gate)
+		}
 	}
 
 	// Walk meta module Egress gates and connect new port pipeline modules
 	for gate, mod := range module.GetEGateMap() {
-		newMod.Connect(s.createPipeline(mod, port), true, &gate)
+		if mod != nil {
+			newMod.Connect(s.createPipeline(mod, port), true, &gate)
+		}
 	}
 	return newMod
 }
@@ -184,12 +192,18 @@ func (s *NimbessPipeline) GetLastModule(excludedTypes []reflect.Type) network.Pi
 
 // DisconnectPipeline disconnects any modules of type modType that are attached to the last module in a pipeline
 func (s *NimbessPipeline) DisconnectPipeline(modType reflect.Type) error {
+    if modType == nil {
+        return nil
+    }
 	log.Debugf("Searching for modules to disconnect from pipeline %s of type %s", s.Name, modType.Name())
 	lastMod := s.GetLastModule([]reflect.Type{modType})
 	if lastMod == nil {
 		return fmt.Errorf("could not find last module in pipeline %s for disconnect", s.Name)
 	}
 	for egate, mod := range lastMod.GetEGateMap() {
+        if mod == nil {
+            continue
+        }
 		// search gates in connecting module to remove
 		for igate, iMod := range mod.GetIGateMap() {
 			if iMod == lastMod {

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
+	"github.com/google/uuid"
 	"github.com/nimbess/nimbess-agent/pkg/network"
 	"github.com/nimbess/nimbess-agent/pkg/proto/bess_pb"
 	"net/url"
@@ -41,10 +42,12 @@ const (
 	VPORT     = "VPort"
 	PMDPORT   = "PMDPort"
 	PCAPPORT  = "PCAPPort"
+	UNIXPORT  = "UnixSocketPort"
 	PORTOUT   = "PortOut"
 	PORTINC   = "PortInc"
 	L2FORWARD = "L2Forward"
 	REPLICATE = "Replicate"
+	SOCKET_PATH = "/var/lib/nimbess/cni/u-%s"
 	URLFILTER = "UrlFilter"
 )
 
@@ -56,7 +59,31 @@ type Driver struct {
 	drivers.DriverConfig
 	bessClient bess_pb.BESSControlClient
 	Context    context.Context
+    notifications chan network.L2FIBCommand
+    socketmap map[string]string
 }
+
+func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Driver){
+    return &Driver{
+        DriverConfig: configArg,
+        Context: contextArg,
+        notifications: make(chan network.L2FIBCommand),
+        socketmap: make(map[string]string),
+    }
+}
+
+// map various socket paths onto a semirandom sequence which will fit
+// path length restriction
+
+func (d *Driver) socketMapEntry(arg string) string {
+    if entry, err := d.socketmap[arg]; err {
+        return entry
+    }
+    entry, _ := uuid.NewRandom()
+    d.socketmap[arg] = entry.String()
+    return d.socketmap[arg]
+}
+
 
 // Connect is used to setup gRPC connection with the data plane.
 func (d *Driver) Connect() *grpc.ClientConn {
@@ -79,6 +106,10 @@ func (d *Driver) Connect() *grpc.ClientConn {
 		log.Warning("Failed to start workers!")
 	}
 	return conn
+}
+
+func (d *Driver) GetNotifications() (chan network.L2FIBCommand) {
+    return d.notifications
 }
 
 func initWorkers(client bess_pb.BESSControlClient, workerCores []int64) {
@@ -168,6 +199,8 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 	for _, module := range modules {
 		// Figure out type of Module and proper create handler
 		switch reflect.TypeOf(module) {
+        case nil:
+                continue
 		case reflect.TypeOf(&network.IngressPort{}):
 			if exists, _ := objectExists(d.bessClient, module.GetName(), MODULE); exists == true {
 				log.Debugf("Skipping render for %s, already exists", module.GetName())
@@ -212,6 +245,9 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 		if reflect.TypeOf(module) == reflect.TypeOf(&network.Switch{}) {
 			continue
 		}
+		if reflect.TypeOf(module) == nil {
+			continue
+		}
 		if err := d.wireModule(module); err != nil {
 			return err
 		}
@@ -243,7 +279,7 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	l2Fwd := &L2Forward{Switch: network.Switch{}}
 	l2Fwd.SetName(fmt.Sprintf("%s_l2forward", module.GetName()))
 	l2Fwd.IGates = module.IGates
-	l2Fwd.EGates = make(map[network.Gate]network.PipelineModule)
+	l2Fwd.EGates = network.MakeGateMap()
 	l2Fwd.L2FIB = module.L2FIB
 	if err := d.createL2ForwardModule(*l2Fwd); err != nil {
 		return err
@@ -255,11 +291,32 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 	// Egress gates from original Switch module will be used for L2Forward lookup match, and then
 	// also used for replicator flooding. Add Egress Gate for L2Forward -> replicator and Ingress
 	// gate for reverse
-	l2Fwd.EGates[999] = rep
+	l2Fwd.EGates[0] = rep
 	// Replicate should have no Ingress gates other than l2fwd
-	rep.IGates = make(map[network.Gate]network.PipelineModule)
+	rep.IGates = network.MakeGateMap()
 	rep.IGates[0] = l2Fwd
 	if err := d.createReplicateModule(*rep); err != nil {
+		return err
+	}
+	port := &network.Port{
+		PortName:fmt.Sprintf("%s_monitor", module.GetName()),
+		Virtual:false,
+		DPDK:false,
+		UnixSocket:true,
+		SocketPath:fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
+	}
+	if err := d.createPort(port); err != nil {
+		return err
+	}
+	monitor := &network.EgressPort{
+		Port:port,
+	}
+	monitor.SetName(port.PortName)
+	monitor.IGates = network.MakeGateMap()
+	monitor.IGates[rep.GetNextEGate()] = rep
+	rep.EGates[rep.GetNextEGate()] = monitor
+
+	if err := d.createPortOutModule(monitor); err != nil {
 		return err
 	}
 
@@ -272,8 +329,11 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 
-	// Set default gate for l2forward to 999
-	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 999}
+	if err := d.wireModule(monitor); err != nil {
+		return err
+	}
+	// Set default gate for l2forward to 0
+	gateArg := &bess_pb.L2ForwardCommandSetDefaultGateArg{Gate: 0}
 	gateAny, err := ptypes.MarshalAny(gateArg)
 	if err != nil {
 		log.Errorf("Failure to serialize default gate arg: %v", gateArg)
@@ -288,9 +348,19 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		log.Errorf("Failed to set default gate for l2forward, error: %s", res.GetError().GetErrmsg())
 		return errors.New(res.GetError().GetErrmsg())
 	}
+	// We need to recover the original mod name from Switch_%s
+	origName := module.GetName()
+	metaName := module.GetMeta() //expected as Switch_<meta name> - from pipeline module
+	if len(metaName) == 0 {
+		log.Warningf("Meta pipeline empty for Switch: %s", origName)
+	}
+	derivedPortName := origName[len(metaName)+1:] // remove "<MetaName>_" prefix
+	log.Debugf("Module name: %s, meta name: %s, port name: %s", origName, metaName, derivedPortName)
+	r := NewReader(derivedPortName, port.SocketPath, d.notifications)
+
+	go r.Run()
 	log.Infof("BESS Switch created with L2FWD: %s, Replicate: %s", l2Fwd.Name, rep.Name)
 	return nil
-
 }
 
 // createReplicateModule creates an instance of a Replicate in BESS
@@ -356,6 +426,10 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire ingress gates first: other_module<M1> (eGate) --> (iGate) this_module<M2>
 	iGates := module.GetIGateMap()
 	for iGate, mod1 := range iGates {
+        if mod1 == nil {
+            // There is little point in explicit wiring a null igate to let's say DROP
+            continue
+        }
 		log.Debugf("Wiring Ingress gate %d, peering module: %s", iGate, mod1.GetName())
 		matchingConn := false
 		// We now need to get eGate for connecting module
@@ -428,6 +502,9 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire egress gates: this_module<M1> (eGate) --> (iGate) other_module<M2>
 	eGates := module.GetEGateMap()
 	for eGate, mod2 := range eGates {
+        if mod2 == nil {
+            continue
+        }
 		log.Debugf("Wiring Egress gate %d, peering module: %s", eGate, mod2.GetName())
 		matchingConn := false
 		// We now need to get iGate for connecting module
@@ -669,14 +746,24 @@ func (d *Driver) createPort(port *network.Port) error {
 		if port.DPDK {
 			return errors.New("DPDK physical ports are not currently supported")
 		}
-		// Must be a kernel iface, use PCAP type port
-		portDriver = PCAPPORT
-		portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
-		portAny, err = ptypes.MarshalAny(portArg)
-		if err != nil {
-			log.Errorf("Failure to serialize kernel port args: %v", portArg)
-			return errors.New("failed to serialize port args")
-		}
+                if port.UnixSocket {
+                    portDriver = UNIXPORT
+                    portArg := &bess_pb.UnixSocketPortArg{Path: port.SocketPath}
+                    portAny, err = ptypes.MarshalAny(portArg)
+                    if err != nil {
+                            log.Errorf("Failure to serialize Unix Socket port args: %v", portArg)
+                            return errors.New("failed to serialize port args")
+                    }
+                } else {
+                    // Must be a kernel iface, use PCAP type port
+                    portDriver = PCAPPORT
+                    portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
+                    portAny, err = ptypes.MarshalAny(portArg)
+                    if err != nil {
+                            log.Errorf("Failure to serialize pcap port args: %v", portArg)
+                            return errors.New("failed to serialize port args")
+                    }
+            }
 	}
 
 	portRequest := &bess_pb.CreatePortRequest{
@@ -684,6 +771,7 @@ func (d *Driver) createPort(port *network.Port) error {
 		Driver: portDriver,
 		Arg:    portAny,
 	}
+	log.Debugf("Requesting a port create for: %v, %v, %+v", port.PortName, portDriver, portAny)
 	portRes, err := d.bessClient.CreatePort(d.Context, portRequest)
 
 	if err != nil || portRes.Error.Errmsg != "" {
@@ -773,6 +861,30 @@ func (d *Driver) AddEntryL2FIB(module *network.Switch, macAddr string, gate netw
 	return nil
 }
 
+// AddEntryL2FIB adds an L2 entry (Destination MAC address and output gate) to a Switch
+func (d *Driver) DelEntryL2FIB(module *network.Switch, macAddr string) error {
+	log.Infof("Deleting L2 BESS entry for mac: %s", macAddr)
+	entry := []string{macAddr}
+	delArg := &bess_pb.L2ForwardCommandDeleteArg{Addrs: entry}
+	FIBAny, err := ptypes.MarshalAny(delArg)
+	if err != nil {
+		log.Errorf("Failure to serialize L2 delete args: %v", delArg)
+		return err
+	}
+	l2FwdName := fmt.Sprintf("%s_l2forward", module.GetName())
+	cmd := &bess_pb.CommandRequest{Name: l2FwdName, Cmd: "delete", Arg: FIBAny}
+	res, err := d.bessClient.ModuleCommand(context.Background(), cmd)
+	if err != nil {
+		log.Errorf("Failed to delete L2FIB entry: %v, error: %v", entry, err)
+		return err
+	} else if res.GetError().GetCode() != 0 {
+		log.Errorf("Failed to delete tcam entry, error: %s", res.GetError().GetErrmsg())
+		return errors.New(res.GetError().GetErrmsg())
+	}
+	log.Infof("BESS L2 FIB entry deleted: %+v", entry)
+	return nil
+}
+
 // deleteModule handles deleting a module by name in BESS. Ignores modules that do not exist.
 // name is name of module to delete
 func (d *Driver) deleteModule(name string) error {
@@ -811,6 +923,14 @@ func (d *Driver) DeleteModules(modules []network.PipelineModule, egress bool) er
 			}
 			log.Debug("Switch detected, deleting replicator module")
 			if err := d.deleteModule(fmt.Sprintf("%s_replicate", module.GetName())); err != nil {
+				return err
+			}
+			log.Debug("Switch detected, deleting monitor PortOut")
+			if err := d.deleteModule(fmt.Sprintf("%s_monitor", module.GetName())); err != nil {
+				return err
+			}
+			log.Debug("Switch detected, deleting monitor Port")
+			if err := d.DeletePort(fmt.Sprintf("%s_monitor", module.GetName())); err != nil {
 				return err
 			}
 		} else if reflect.TypeOf(module) == reflect.TypeOf(&network.EgressPort{}) && !egress {

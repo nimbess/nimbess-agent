@@ -29,6 +29,8 @@ type Driver interface {
 	DeleteModules(modules []network.PipelineModule, egress bool) error
 	DeletePort(name string) error
 	AddEntryL2FIB(module *network.Switch, macAddr string, gate network.Gate) error
+	DelEntryL2FIB(module *network.Switch, macAddr string) error
+	GetNotifications() (chan network.L2FIBCommand)
 	Commit() error
 }
 

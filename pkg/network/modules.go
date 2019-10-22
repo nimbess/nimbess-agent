@@ -25,6 +25,15 @@ import (
 // Gate is a virtual port for a module for traffic to ingress or egress
 type Gate uint64
 
+type L2FIBCommand struct {
+    Command string
+    MAC string
+    Permanent bool
+    Setage int64
+    Port string
+}
+
+
 // PipelineModule type to implement module updates
 type PipelineModule interface {
 	Connect(module PipelineModule, egress bool, gate *Gate) Gate
@@ -66,6 +75,7 @@ type Port struct {
 	PortName   string
 	Virtual    bool
 	DPDK       bool
+    UnixSocket bool
 	IfaceName  string
 	Network    string
 	NamesSpace string
@@ -204,3 +214,11 @@ func getGate(gateMap map[Gate]PipelineModule, module PipelineModule) *Gate {
 
 	return nil
 }
+
+// Create a Gate Map - will include init for default gates later
+func MakeGateMap() map[Gate]PipelineModule {
+    rGates := make(map[Gate]PipelineModule)
+    return rGates
+}
+
+

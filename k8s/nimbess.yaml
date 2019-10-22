@@ -82,6 +82,8 @@ spec:
               name: agent-conf-dir
             - mountPath: /host/proc
               name: proc-dir
+            - mountPath: /var/lib/nimbess/cni/
+              name: shared-dir
             - mountPath: /etc/machine-id
               name: machine-dir
               subPath: machine-id
