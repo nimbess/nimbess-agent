@@ -26,13 +26,12 @@ import (
 type Gate uint64
 
 type L2FIBCommand struct {
-    Command string
-    MAC string
-    Permanent bool
-    Setage int64
-    Port string
+	Command   string
+	MAC       string
+	Permanent bool
+	Setage    int64
+	Port      string
 }
-
 
 // PipelineModule type to implement module updates
 type PipelineModule interface {
@@ -75,7 +74,7 @@ type Port struct {
 	PortName   string
 	Virtual    bool
 	DPDK       bool
-    UnixSocket bool
+	UnixSocket bool
 	IfaceName  string
 	Network    string
 	NamesSpace string
@@ -217,8 +216,6 @@ func getGate(gateMap map[Gate]PipelineModule, module PipelineModule) *Gate {
 
 // Create a Gate Map - will include init for default gates later
 func MakeGateMap() map[Gate]PipelineModule {
-    rGates := make(map[Gate]PipelineModule)
-    return rGates
+	rGates := make(map[Gate]PipelineModule)
+	return rGates
 }
-
-
