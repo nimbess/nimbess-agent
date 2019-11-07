@@ -37,18 +37,18 @@ import (
 
 // BESS specific object names
 const (
-	PORT      = "Port"
-	MODULE    = "Module"
-	VPORT     = "VPort"
-	PMDPORT   = "PMDPort"
-	PCAPPORT  = "PCAPPort"
-	UNIXPORT  = "UnixSocketPort"
-	PORTOUT   = "PortOut"
-	PORTINC   = "PortInc"
-	L2FORWARD = "L2Forward"
-	REPLICATE = "Replicate"
+	PORT        = "Port"
+	MODULE      = "Module"
+	VPORT       = "VPort"
+	PMDPORT     = "PMDPort"
+	PCAPPORT    = "PCAPPort"
+	UNIXPORT    = "UnixSocketPort"
+	PORTOUT     = "PortOut"
+	PORTINC     = "PortInc"
+	L2FORWARD   = "L2Forward"
+	REPLICATE   = "Replicate"
 	SOCKET_PATH = "/var/lib/nimbess/cni/u-%s"
-	URLFILTER = "UrlFilter"
+	URLFILTER   = "UrlFilter"
 )
 
 // SupportedObjects contains the BESS objects supported by this driver
@@ -57,33 +57,32 @@ var SupportedObjects = [...]string{PORT, MODULE}
 // Driver represents the BESS driver for Nimbess Agent
 type Driver struct {
 	drivers.DriverConfig
-	bessClient bess_pb.BESSControlClient
-	Context    context.Context
-    notifications chan network.L2FIBCommand
-    socketmap map[string]string
+	bessClient    bess_pb.BESSControlClient
+	Context       context.Context
+	notifications chan network.L2FIBCommand
+	socketmap     map[string]string
 }
 
-func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) (*Driver){
-    return &Driver{
-        DriverConfig: configArg,
-        Context: contextArg,
-        notifications: make(chan network.L2FIBCommand),
-        socketmap: make(map[string]string),
-    }
+func NewDriver(configArg drivers.DriverConfig, contextArg context.Context) *Driver {
+	return &Driver{
+		DriverConfig:  configArg,
+		Context:       contextArg,
+		notifications: make(chan network.L2FIBCommand),
+		socketmap:     make(map[string]string),
+	}
 }
 
 // map various socket paths onto a semirandom sequence which will fit
 // path length restriction
 
 func (d *Driver) socketMapEntry(arg string) string {
-    if entry, err := d.socketmap[arg]; err {
-        return entry
-    }
-    entry, _ := uuid.NewRandom()
-    d.socketmap[arg] = entry.String()
-    return d.socketmap[arg]
+	if entry, err := d.socketmap[arg]; err {
+		return entry
+	}
+	entry, _ := uuid.NewRandom()
+	d.socketmap[arg] = entry.String()
+	return d.socketmap[arg]
 }
-
 
 // Connect is used to setup gRPC connection with the data plane.
 func (d *Driver) Connect() *grpc.ClientConn {
@@ -108,8 +107,8 @@ func (d *Driver) Connect() *grpc.ClientConn {
 	return conn
 }
 
-func (d *Driver) GetNotifications() (chan network.L2FIBCommand) {
-    return d.notifications
+func (d *Driver) GetNotifications() chan network.L2FIBCommand {
+	return d.notifications
 }
 
 func initWorkers(client bess_pb.BESSControlClient, workerCores []int64) {
@@ -199,8 +198,8 @@ func (d *Driver) RenderModules(modules []network.PipelineModule) error {
 	for _, module := range modules {
 		// Figure out type of Module and proper create handler
 		switch reflect.TypeOf(module) {
-        case nil:
-                continue
+		case nil:
+			continue
 		case reflect.TypeOf(&network.IngressPort{}):
 			if exists, _ := objectExists(d.bessClient, module.GetName(), MODULE); exists == true {
 				log.Debugf("Skipping render for %s, already exists", module.GetName())
@@ -299,17 +298,17 @@ func (d *Driver) createSwitch(module *network.Switch) error {
 		return err
 	}
 	port := &network.Port{
-		PortName:fmt.Sprintf("%s_monitor", module.GetName()),
-		Virtual:false,
-		DPDK:false,
-		UnixSocket:true,
-		SocketPath:fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
+		PortName:   fmt.Sprintf("%s_monitor", module.GetName()),
+		Virtual:    false,
+		DPDK:       false,
+		UnixSocket: true,
+		SocketPath: fmt.Sprintf(SOCKET_PATH, d.socketMapEntry(module.GetName())),
 	}
 	if err := d.createPort(port); err != nil {
 		return err
 	}
 	monitor := &network.EgressPort{
-		Port:port,
+		Port: port,
 	}
 	monitor.SetName(port.PortName)
 	monitor.IGates = network.MakeGateMap()
@@ -426,10 +425,10 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire ingress gates first: other_module<M1> (eGate) --> (iGate) this_module<M2>
 	iGates := module.GetIGateMap()
 	for iGate, mod1 := range iGates {
-        if mod1 == nil {
-            // There is little point in explicit wiring a null igate to let's say DROP
-            continue
-        }
+		if mod1 == nil {
+			// There is little point in explicit wiring a null igate to let's say DROP
+			continue
+		}
 		log.Debugf("Wiring Ingress gate %d, peering module: %s", iGate, mod1.GetName())
 		matchingConn := false
 		// We now need to get eGate for connecting module
@@ -502,9 +501,9 @@ func (d *Driver) wireModule(module network.PipelineModule) error {
 	// Wire egress gates: this_module<M1> (eGate) --> (iGate) other_module<M2>
 	eGates := module.GetEGateMap()
 	for eGate, mod2 := range eGates {
-        if mod2 == nil {
-            continue
-        }
+		if mod2 == nil {
+			continue
+		}
 		log.Debugf("Wiring Egress gate %d, peering module: %s", eGate, mod2.GetName())
 		matchingConn := false
 		// We now need to get iGate for connecting module
@@ -744,26 +743,33 @@ func (d *Driver) createPort(port *network.Port) error {
 		}
 	} else {
 		if port.DPDK {
-			return errors.New("DPDK physical ports are not currently supported")
+			portDriver = PMDPORT
+			pciArg := &bess_pb.PMDPortArg_Pci{Pci: port.IfaceName}
+			portArg := &bess_pb.PMDPortArg{Port: pciArg}
+			portAny, err = ptypes.MarshalAny(portArg)
+			if err != nil {
+				log.Errorf("Failure to serialize PMD Port port args: %v", portArg)
+				return errors.New("failed to serialize port args")
+			}
+
+		} else if port.UnixSocket {
+			portDriver = UNIXPORT
+			portArg := &bess_pb.UnixSocketPortArg{Path: port.SocketPath}
+			portAny, err = ptypes.MarshalAny(portArg)
+			if err != nil {
+				log.Errorf("Failure to serialize Unix Socket port args: %v", portArg)
+				return errors.New("failed to serialize port args")
+			}
+		} else {
+			// Must be a kernel iface, use PCAP type port
+			portDriver = PCAPPORT
+			portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
+			portAny, err = ptypes.MarshalAny(portArg)
+			if err != nil {
+				log.Errorf("Failure to serialize pcap port args: %v", portArg)
+				return errors.New("failed to serialize port args")
+			}
 		}
-                if port.UnixSocket {
-                    portDriver = UNIXPORT
-                    portArg := &bess_pb.UnixSocketPortArg{Path: port.SocketPath}
-                    portAny, err = ptypes.MarshalAny(portArg)
-                    if err != nil {
-                            log.Errorf("Failure to serialize Unix Socket port args: %v", portArg)
-                            return errors.New("failed to serialize port args")
-                    }
-                } else {
-                    // Must be a kernel iface, use PCAP type port
-                    portDriver = PCAPPORT
-                    portArg := &bess_pb.PCAPPortArg{Dev: port.IfaceName}
-                    portAny, err = ptypes.MarshalAny(portArg)
-                    if err != nil {
-                            log.Errorf("Failure to serialize pcap port args: %v", portArg)
-                            return errors.New("failed to serialize port args")
-                    }
-            }
 	}
 
 	portRequest := &bess_pb.CreatePortRequest{

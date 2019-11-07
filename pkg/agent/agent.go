@@ -28,6 +28,7 @@ import (
 	"github.com/nimbess/nimbess-agent/pkg/etcdv3"
 	"github.com/nimbess/nimbess-agent/pkg/etcdv3/model"
 	"github.com/nimbess/nimbess-agent/pkg/network"
+	"github.com/nimbess/nimbess-agent/pkg/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/net/context"
@@ -72,8 +73,8 @@ var vhostIndex = 0
 
 type L2FIBEntry struct {
 	permanent bool
-	age int64
-	port string
+	age       int64
+	port      string
 }
 
 // NimbessAgent represents the agent runtime server.
@@ -223,7 +224,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		PortName:   portName,
 		Virtual:    true,
 		DPDK:       false,
-                UnixSocket: false,
+		UnixSocket: false,
 		IfaceName:  req.GetInterfaceName(),
 		NamesSpace: req.GetNetworkNamespace(),
 	}
@@ -277,11 +278,11 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 			kernIface := s.Config.KernelIF
 			log.Infof("Initializing Port Pipeline for Kernel Interface %s", kernIface)
 			kernPort := &network.Port{
-				PortName:  s.Config.KernelIF,
-				Virtual:   false,
-				DPDK:      false,
-                                UnixSocket:false,
-				IfaceName: s.Config.KernelIF,
+				PortName:   s.Config.KernelIF,
+				Virtual:    false,
+				DPDK:       false,
+				UnixSocket: false,
+				IfaceName:  s.Config.KernelIF,
 			}
 
 			res, err := s.createPortPipeline(kernPort, metaKey)
@@ -294,11 +295,11 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 		// Create Kernel VPort for host networking and default routing for the pod
 		log.Info("Creating Kernel Virtual Port")
 		kernVPort := &network.Port{
-			PortName:  "nimbess0",
-			Virtual:   true,
-			DPDK:      false,
-                        UnixSocket:false,
-			IfaceName: "nimbess0",
+			PortName:   "nimbess0",
+			Virtual:    true,
+			DPDK:       false,
+			UnixSocket: false,
+			IfaceName:  "nimbess0",
 		}
 		// Kernel VPort needs an IP, which will be the default gateway for all pods on this node
 		var err error
@@ -330,10 +331,43 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 			log.Error("Error while initializing MetaPipeline: %v", err)
 			return &cni.CNIReply{Result: CniIncompatible}, err
 		}
+
+		// Right now we only support DPDK fast path, but in the future make this configurable for alternate
+		// FastPaths like XDPa
+
+		// Check if physical port defined in config, if present and no meta pipeline we need to create
+		// this port MUST be bound to DPDK already, along with a data plane restart
+		if s.Config.FastPathIF != "" {
+			if err := util.ValidatePCI(s.Config.FastPathIF); err != nil {
+				log.Error("error validating PCI address: %s", err)
+				return &cni.CNIReply{Result: FastPathFailure}, err
+			}
+
+			fastPhyName := "dpdk0"
+			fastPhyIP, err := invokeIPAM(InternalIPAM, true)
+			if err != nil {
+				return &cni.CNIReply{Result: CniIncompatible}, err
+			}
+
+			fastPhy := &network.Port{
+				PortName:  fastPhyName,
+				Virtual:   false,
+				DPDK:      true,
+				IPAddr:    fastPhyIP,
+				IfaceName: s.Config.FastPathIF,
+			}
+
+			res, err := s.createPortPipeline(fastPhy, fastMetaKey)
+			if err != nil {
+				log.Errorf("Error while creating FastPath physical interface: %v", err)
+				return &cni.CNIReply{Result: FastPathFailure}, err
+			}
+			log.Infof("FastPath Physical Port created: %v in meta network: %s", res.GetInterfaces(), fastMetaKey)
+		}
 	}
+
+	// Create virtual port for POD
 	fastPortName := fmt.Sprintf("%s-%s", portName, FastPathNetwork)
-	// Right now we only support DPDK fast path, but in the future make this configurable for alternate
-	// FastPaths like XDP
 	fastPortIP, err := invokeIPAM(InternalIPAM, true)
 	if err != nil {
 		return &cni.CNIReply{Result: CniIncompatible}, err
@@ -357,7 +391,7 @@ func (s *NimbessAgent) Add(ctx context.Context, req *cni.CNIRequest) (*cni.CNIRe
 	// Create configuration data to prepare for annotation
 	fastIP, fastNet, err := net.ParseCIDR(fastPort.IPAddr)
 	if err != nil {
-		return &cni.CNIReply{Result: FastPathFailure}, fmt.Errorf("Failed to parse FP IP: %s", fastPort.IPAddr)
+		return &cni.CNIReply{Result: FastPathFailure}, fmt.Errorf("failed to parse FP IP: %s", fastPort.IPAddr)
 	}
 	ipConf := &current.IPConfig{
 		Address: net.IPNet{IP: fastIP, Mask: fastNet.Mask},
@@ -464,10 +498,10 @@ func (s *NimbessAgent) updateFIB(pipeline *NimbessPipeline, port network.EgressP
 			log.Errorf("Unable to find Forwarding Module in pipeline: %s", pipeline.Name)
 			return errors.New("unable to find Forwarding Module in Pipeline")
 		}
-		pipeline.l2fib[port.MacAddr] = &L2FIBEntry {
+		pipeline.l2fib[port.MacAddr] = &L2FIBEntry{
 			permanent: true,
-			age:0,
-			port:port.GetName(),
+			age:       0,
+			port:      port.GetName(),
 		}
 		// If L2 get MAC and update FIB with forwarder outgoing gate to EgressPort
 		// TODO this means that the forwarder must be directly connected to EgressPort,
@@ -578,7 +612,6 @@ func (s *NimbessAgent) Delete(ctx context.Context, req *cni.CNIRequest) (*cni.CN
 		}
 	}
 
-
 	for _, portName := range []string{reqPortName, fmt.Sprintf("%s-%s", reqPortName, FastPathNetwork)} {
 		// Check if this port already has a pipeline
 		if _, ok := s.Pipelines[portName]; !ok {
@@ -687,10 +720,10 @@ func annotatePod(k8sClient kubernetes.Interface, req *cni.CNIRequest, configData
 	return nil
 }
 
-func (s *NimbessAgent) processNotification() (bool) {
+func (s *NimbessAgent) processNotification() bool {
 
 	fibRequest := <-s.notifications
-		log.Debugf("Processing FIB Request %s MAC %s", fibRequest.Command, fibRequest.MAC)
+	log.Debugf("Processing FIB Request %s MAC %s", fibRequest.Command, fibRequest.MAC)
 
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -698,7 +731,7 @@ func (s *NimbessAgent) processNotification() (bool) {
 	// pipeline's fib points to its parent metapipeline fib
 	pipeline, ok := s.Pipelines[fibRequest.Port]
 
-	if (!ok) {
+	if !ok {
 		log.Errorf("Failed to find metaPipeline and its fib for port: %s", fibRequest.Port)
 		return true /* This is bad, but it is not a reason to exit the notification thread */
 	}
@@ -706,25 +739,25 @@ func (s *NimbessAgent) processNotification() (bool) {
 	if fibRequest.Command == "LEARN" {
 		// Learned
 		entry, ok := pipeline.l2fib[fibRequest.MAC]
-		if (!ok) {
-			pipeline.l2fib[fibRequest.MAC] = &L2FIBEntry {
+		if !ok {
+			pipeline.l2fib[fibRequest.MAC] = &L2FIBEntry{
 				permanent: false,
-				age:fibRequest.Setage,
-				port:fibRequest.Port,
+				age:       fibRequest.Setage,
+				port:      fibRequest.Port,
 			}
 			for key, targetPipeline := range s.Pipelines {
-				if (key != fibRequest.Port) {
+				if key != fibRequest.Port {
 					// no Routing for self
 					s.addMACtoL2FIB(fibRequest.MAC, targetPipeline, fmt.Sprintf("%s_egress", fibRequest.Port))
 				}
 			}
 		} else {
-			if (!entry.permanent) {
+			if !entry.permanent {
 				entry.age = time.Now().Unix()
 			}
 		}
 	}
-	if  fibRequest.Command == "EXPIRE" {
+	if fibRequest.Command == "EXPIRE" {
 		entry, ok := pipeline.l2fib[fibRequest.MAC]
 		if ok && (!entry.permanent) {
 			delete(pipeline.l2fib, fibRequest.MAC)
@@ -734,10 +767,10 @@ func (s *NimbessAgent) processNotification() (bool) {
 		}
 	}
 	if fibRequest.Command == "ADD" {
-		pipeline.l2fib[fibRequest.MAC] = &L2FIBEntry {
+		pipeline.l2fib[fibRequest.MAC] = &L2FIBEntry{
 			permanent: true,
-			age:0,
-			port:fibRequest.Port,
+			age:       0,
+			port:      fibRequest.Port,
 		}
 		for key, targetPipeline := range s.Pipelines {
 			if key != fibRequest.Port {
@@ -754,7 +787,6 @@ func (s *NimbessAgent) runNotifications() {
 	}
 	log.Debugf("Notification thread exited")
 }
-
 
 // Init initializes the agent
 func (s *NimbessAgent) Init() error {
